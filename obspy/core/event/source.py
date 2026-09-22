@@ -446,6 +446,7 @@ def farfield(mt, points, type):
         raise ValueError(msg)
     is_p_wave = type == "P"
 
+    original_points = points
     ndim, npoints = points.shape
     if ndim == 2:
         # points are given as theta,phi
@@ -493,7 +494,7 @@ def farfield(mt, points, type):
 
     from obspy import _scientific_checkers
     if _scientific_checkers.enabled():
-        _scientific_checkers.check_farfield(mt, points, type, disp)
+        _scientific_checkers.check_farfield(mt, original_points, type, disp)
     return disp
 
 

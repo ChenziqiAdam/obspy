@@ -63,22 +63,36 @@ def _scale(*values):
     return result
 
 
-def _different(a, b, factor=256.0, condition=1.0):
+def _dtype_epsilon(*values):
+    """Largest machine epsilon among represented floating-point dtypes."""
+    epsilon = _EPS
+    for value in values:
+        dtype = np.asarray(value).dtype
+        if dtype.kind in "fc":
+            epsilon = max(epsilon, float(np.finfo(dtype).eps))
+    return epsilon
+
+
+def _different(a, b, factor=256.0, condition=1.0, epsilon=None):
     a = np.asarray(a)
     b = np.asarray(b)
     if a.shape != b.shape or not _finite(a, b):
         return True
-    tol = factor * _EPS * max(1.0, float(condition)) * _scale(a, b)
+    if epsilon is None:
+        epsilon = _dtype_epsilon(a, b)
+    tol = factor * epsilon * max(1.0, float(condition)) * _scale(a, b)
     return bool(np.any(np.abs(a - b) > tol))
 
 
 def _different_at_scale(a, b, reference_scale, factor=256.0,
-                        condition=1.0):
+                        condition=1.0, epsilon=None):
     a = np.asarray(a)
     b = np.asarray(b)
     if a.shape != b.shape or not _finite(a, b, reference_scale):
         return True
-    tol = (factor * _EPS * max(1.0, float(condition)) *
+    if epsilon is None:
+        epsilon = _dtype_epsilon(a, b)
+    tol = (factor * epsilon * max(1.0, float(condition)) *
            max(1.0, float(reference_scale)))
     return bool(np.any(np.abs(a - b) > tol))
 
@@ -98,7 +112,9 @@ def check_rotate_ne_rt(n, e, ba, r, t):
                        "OB-ROT-001")
             lhs = np.asarray(n, float) ** 2 + np.asarray(e, float) ** 2
             rhs = np.asarray(r, float) ** 2 + np.asarray(t, float) ** 2
-            trigger_if(_different(lhs, rhs, 128), "OB-ROT-002")
+            trigger_if(_different(lhs, rhs, 128,
+                                  epsilon=_dtype_epsilon(n, e, r, t)),
+                       "OB-ROT-002")
     except Exception:
         pass
 
@@ -121,7 +137,9 @@ def check_rotate_zne_lqt(z, n, e, ba, inc, l, q, t):
                    np.asarray(e, float) ** 2)
             rhs = (np.asarray(l, float) ** 2 + np.asarray(q, float) ** 2 +
                    np.asarray(t, float) ** 2)
-            trigger_if(_different(lhs, rhs, 192), "OB-ROT-004")
+            trigger_if(_different(lhs, rhs, 192,
+                                  epsilon=_dtype_epsilon(z, n, e, l, q, t)),
+                       "OB-ROT-004")
     except Exception:
         pass
 
@@ -166,8 +184,11 @@ _ARRAY_KEYS = ("ts_d", "ts_dh", "ts_s", "ts_sh", "ts_wmag", "ts_w1",
                "ts_w2", "ts_w3", "ts_tilt", "ts_e")
 
 
-def _array_result_differs(first, second, condition, extra=1.0):
+def _array_result_differs(first, second, condition, extra=1.0, epsilon=None):
     return any(_different(first[key], second[key], 2048 * extra, condition)
+               if epsilon is None else
+               _different(first[key], second[key], 2048 * extra, condition,
+                          epsilon=epsilon)
                for key in _ARRAY_KEYS)
 
 
@@ -201,17 +222,19 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
             trigger_if(_array_result_differs(result, permuted, condition),
                        "OB-ARR-001")
 
-            coords = np.asarray(array_coords, dtype=float)
+            coords = np.asarray(array_coords)
             span = float(np.ptp(coords, axis=0).max())
             if span == 0:
                 return
             max_coord = _scale(coords)
             if max_coord / span < 1e8:
-                shift = span * np.array([0.5, -0.25, 0.125])
+                shift = span * np.array([0.5, -0.25, 0.125],
+                                        dtype=coords.dtype)
                 translated = array_rotation_strain(
                     subarray, ts1, ts2, ts3, vp, vs, coords + shift, sigmau)
                 trigger_if(_array_result_differs(result, translated,
-                                                  condition, 4.0),
+                                                  condition, 4.0,
+                                                  _dtype_epsilon(coords)),
                            "OB-ARR-002")
 
             data_scale = _scale(ts1, ts2, ts3)
@@ -240,7 +263,8 @@ def check_farfield(mt, points, wave_type, displacement):
         with _checking() as run:
             if not run or not _finite(mt, points, displacement):
                 return
-            points = np.asarray(points, dtype=float)
+            points = np.asarray(points)
+            epsilon = _dtype_epsilon(mt, points, displacement)
             if points.shape[0] == 2:
                 cart = np.vstack((np.sin(points[0]) * np.cos(points[1]),
                                   np.sin(points[0]) * np.sin(points[1]),
@@ -255,7 +279,7 @@ def check_farfield(mt, points, wave_type, displacement):
             gamma = cart / lengths
             disp = np.asarray(displacement, dtype=float)
             tensor_scale = _scale(mt)
-            tol = 512 * _EPS * max(1.0, tensor_scale, _scale(disp))
+            tol = 512 * epsilon * max(1.0, tensor_scale, _scale(disp))
             radial = np.sum(disp * gamma, axis=0)
             if str(wave_type).upper() == "P":
                 transverse = disp - gamma * radial
@@ -266,16 +290,21 @@ def check_farfield(mt, points, wave_type, displacement):
             from obspy.core.event.source import _fullmt, farfield
             if points.shape[0] == 2:
                 other = farfield(mt, cart, wave_type)
-                trigger_if(_different(disp, other, 512), "OB-SRC-003")
+                trigger_if(_different(disp, other, 512, epsilon=epsilon),
+                           "OB-SRC-003")
             else:
                 other = farfield(mt, -points, wave_type)
-                trigger_if(_different(other, -disp, 512), "OB-SRC-004")
+                trigger_if(_different(other, -disp, 512, epsilon=epsilon),
+                           "OB-SRC-004")
 
-            rotation = np.array([[0., 1., 0.], [-1., 0., 0.], [0., 0., 1.]])
+            cart_dtype = cart.dtype if cart.dtype.kind == "f" else float
+            rotation = np.array([[0., 1., 0.], [-1., 0., 0.], [0., 0., 1.]],
+                                dtype=cart_dtype)
             matrix = _fullmt(mt)
             rotated_mt = _moment_components(rotation @ matrix @ rotation.T)
             rotated = farfield(rotated_mt, rotation @ cart, wave_type)
-            trigger_if(_different(rotated, rotation @ disp, 1024),
+            trigger_if(_different(rotated, rotation @ disp, 1024,
+                                  epsilon=epsilon),
                        "OB-SRC-005")
     except Exception:
         pass
@@ -456,11 +485,28 @@ def check_paz_response(poles, zeros, scale_fac, t_samp, nfft, response,
                                             dtype=int))
             bad = False
             for index in indices:
+                s = 2j * np.pi * frequencies[index]
+                conditions = []
+                for roots in (zeros, poles):
+                    if len(roots) == 0:
+                        conditions.append(1.0)
+                        continue
+                    coefficients = np.poly(roots)
+                    value = np.polyval(coefficients, s)
+                    upper = np.polyval(np.abs(coefficients), abs(s))
+                    condition = abs(upper) / max(abs(value),
+                                                 np.finfo(float).tiny)
+                    conditions.append(float(condition))
+                condition = max(1.0, *conditions)
+                if not np.isfinite(condition) or condition > 1e8:
+                    continue
                 expected = paz_2_amplitude_value_of_freq_resp(
                     {"poles": poles, "zeros": zeros, "gain": scale_fac},
                     frequencies[index])
                 observed = abs(response[index])
-                tol = 4096 * _EPS * max(1.0, expected, observed)
+                degree = max(1, len(poles), len(zeros))
+                tol = (8 * degree * condition * _EPS *
+                       max(1.0, expected, observed))
                 if abs(expected - observed) > tol:
                     bad = True
                     break
@@ -526,21 +572,24 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
             # Endpoint bearings become ill-conditioned as angular separation
             # approaches zero.  A longitude-frame shift first incurs input
             # rounding, which is amplified by the inverse angular separation.
-            angular_separation = max(result[0] / a, _EPS)
+            angular_separation = min(np.pi, max(0.0, result[0] / a))
+            singular_separation = max(
+                min(angular_separation, np.pi - angular_separation), _EPS)
             coordinate_scale = np.deg2rad(
                 max(360.0, abs(lon1), abs(lon2),
                     abs(lon1 + 360.0), abs(lon2 + 360.0)))
             bearing_condition = max(1.0,
-                                    coordinate_scale / angular_separation)
+                                    coordinate_scale / singular_separation)
             angle_tol = max(4096.0, 64.0 * bearing_condition) * \
                 _EPS * 360.0
-            bad_bearings = (_circular_difference(result[1], reverse[2]) >
-                            angle_tol or
-                            _circular_difference(result[2], reverse[1]) >
-                            angle_tol)
-            trigger_if(bad_bearings, "OB-GEO-002")
+            if bearing_condition <= 1e8:
+                bad_bearings = (
+                    _circular_difference(result[1], reverse[2]) > angle_tol or
+                    _circular_difference(result[2], reverse[1]) > angle_tol)
+                trigger_if(bad_bearings, "OB-GEO-002")
 
-            if max(abs(lon1), abs(lon2)) <= 1e6:
+            if (bearing_condition <= 1e8 and
+                    max(abs(lon1), abs(lon2)) <= 1e6):
                 shifted = gps2dist_azimuth(lat1, lon1 + 360.0, lat2,
                                            lon2 + 360.0, a=a, f=f)
                 bad_shift = (abs(result[0] - shifted[0]) > distance_tol or
@@ -580,7 +629,8 @@ def check_locations2degrees(lat1, lon1, lat2, lon2, result):
             lat1d, lat2d = np.degrees(lat1), np.degrees(lat2)
             lon1d, lon2d = np.degrees(lon1), np.degrees(lon2)
             reverse = locations2degrees(lat2d, lon2d, lat1d, lon1d)
-            tol = 4096 * _EPS * 180.0
+            epsilon = _dtype_epsilon(lat1, lon1, lat2, lon2, result)
+            tol = 4096 * epsilon * 180.0
             trigger_if(np.any(np.abs(np.asarray(result) - reverse) > tol),
                        "OB-GEO-004")
             shifted = locations2degrees(lat1d, lon1d + 90.0,
@@ -594,6 +644,7 @@ def check_locations2degrees(lat1, lon1, lat2, lon2, result):
 def check_mean_longitude(longitudes, result):
     try:
         with _checking() as run:
+            original_values = np.asarray(longitudes)
             values = np.asarray(longitudes, dtype=float)
             if (not run or values.size == 0 or not _finite(values, result) or
                     np.any(np.abs(values) > 180)):
@@ -605,7 +656,8 @@ def check_mean_longitude(longitudes, result):
             from obspy.geodetics.base import mean_longitude
             shifted = mean_longitude(shifted_values)
             expected = (float(result) + 90.0 + 180.0) % 360.0 - 180.0
-            tol = 4096 * _EPS * max(1, values.size) / resultant * 360.0
+            epsilon = _dtype_epsilon(original_values, result)
+            tol = 4096 * epsilon * max(1, values.size) / resultant * 360.0
             trigger_if(_circular_difference(shifted, expected) > tol,
                        "OB-GEO-007")
     except Exception:
@@ -639,7 +691,8 @@ def check_correlate(a, b, shift, normalize, method, result):
             reverse = correlate(b, a, shift, demean=False,
                                 normalize=normalize, method=method)
             output_scale = 1.0 if normalize == "naive" else max(1.0, norm)
-            tol = 512 * _EPS * max(1, len(a)) * output_scale
+            epsilon = _dtype_epsilon(a, b, result)
+            tol = 512 * epsilon * max(1, len(a)) * output_scale
             trigger_if(result.shape != reverse.shape or
                        np.any(np.abs(result - reverse[::-1]) > tol),
                        "OB-XCORR-001")
