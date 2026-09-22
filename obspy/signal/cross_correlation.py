@@ -169,6 +169,10 @@ def correlate(a, b, shift, demean=True, normalize='naive', method='auto'):
             cc = cc / norm
     elif normalize is not None:
         raise ValueError("normalize has to be one of (None, 'naive'))")
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_correlate(
+            a, b, shift, normalize, method, cc)
     return cc
 
 

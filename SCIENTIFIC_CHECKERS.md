@@ -3,7 +3,8 @@
 This ObsPy 1.5.1 checkout contains public, opt-in scientific runtime checkers.
 They observe seismic coordinate transformations, array strain/rotation,
 moment-tensor radiation, polarization, TauP ray products, STA/LTA algorithms,
-and instrument responses. Full preconditions and invariants are in
+instrument responses, geodesy, and waveform cross-correlation. Full
+preconditions and invariants are in
 `SCIENTIFIC_CHECKERS.json`.
 
 Set `SCIBENCH_TRIGGER_LOG` to an absolute writable filename, then run tests

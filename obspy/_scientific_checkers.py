@@ -501,3 +501,162 @@ def check_simulate_roundtrip(original, result, samp_rate, paz_remove,
                        "OB-RESP-002")
     except Exception:
         pass
+
+
+def _circular_difference(a, b):
+    return np.abs((np.asarray(a) - np.asarray(b) + 180.0) % 360.0 - 180.0)
+
+
+def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
+    try:
+        with _checking() as run:
+            if not run or not _finite(lat1, lon1, lat2, lon2, a, f, result):
+                return
+            if not (-90 <= lat1 <= 90 and -90 <= lat2 <= 90 and
+                    a > 0 and 0 <= f < 1 and result[0] > 0):
+                return
+            from obspy.geodetics.base import (gps2dist_azimuth,
+                                               locations2degrees)
+            reverse = gps2dist_azimuth(lat2, lon2, lat1, lon1, a=a, f=f)
+            distance_scale = max(1.0, float(a), abs(result[0]),
+                                 abs(reverse[0]))
+            distance_tol = 4096 * _EPS * distance_scale
+            trigger_if(abs(result[0] - reverse[0]) > distance_tol,
+                       "OB-GEO-001")
+            # Endpoint bearings become ill-conditioned as angular separation
+            # approaches zero.  A longitude-frame shift first incurs input
+            # rounding, which is amplified by the inverse angular separation.
+            angular_separation = max(result[0] / a, _EPS)
+            coordinate_scale = np.deg2rad(
+                max(360.0, abs(lon1), abs(lon2),
+                    abs(lon1 + 360.0), abs(lon2 + 360.0)))
+            bearing_condition = max(1.0,
+                                    coordinate_scale / angular_separation)
+            angle_tol = max(4096.0, 64.0 * bearing_condition) * \
+                _EPS * 360.0
+            bad_bearings = (_circular_difference(result[1], reverse[2]) >
+                            angle_tol or
+                            _circular_difference(result[2], reverse[1]) >
+                            angle_tol)
+            trigger_if(bad_bearings, "OB-GEO-002")
+
+            if max(abs(lon1), abs(lon2)) <= 1e6:
+                shifted = gps2dist_azimuth(lat1, lon1 + 360.0, lat2,
+                                           lon2 + 360.0, a=a, f=f)
+                bad_shift = (abs(result[0] - shifted[0]) > distance_tol or
+                             _circular_difference(result[1], shifted[1]) >
+                             angle_tol or
+                             _circular_difference(result[2], shifted[2]) >
+                             angle_tol)
+                trigger_if(bad_shift, "OB-GEO-003")
+
+            spherical = result if f == 0 else gps2dist_azimuth(
+                lat1, lon1, lat2, lon2, a=a, f=0)
+            angular = locations2degrees(lat1, lon1, lat2, lon2)
+            expected = np.deg2rad(angular) * a
+            sphere_tol = 8192 * _EPS * max(1.0, float(a),
+                                           abs(float(expected)))
+            trigger_if(abs(spherical[0] - expected) > sphere_tol,
+                       "OB-GEO-006")
+    except Exception:
+        pass
+
+
+def check_locations2degrees(lat1, lon1, lat2, lon2, result):
+    try:
+        with _checking() as run:
+            if not run or not _finite(lat1, lon1, lat2, lon2, result):
+                return
+            lat1 = np.asarray(lat1)
+            lat2 = np.asarray(lat2)
+            lon1 = np.asarray(lon1)
+            lon2 = np.asarray(lon2)
+            if (np.any(np.abs(lat1) > np.pi / 2) or
+                    np.any(np.abs(lat2) > np.pi / 2) or
+                    _scale(lon1, lon2) > np.deg2rad(1e6)):
+                return
+            from obspy.geodetics.base import locations2degrees
+            # Inputs at this observation point are already in radians.
+            lat1d, lat2d = np.degrees(lat1), np.degrees(lat2)
+            lon1d, lon2d = np.degrees(lon1), np.degrees(lon2)
+            reverse = locations2degrees(lat2d, lon2d, lat1d, lon1d)
+            tol = 4096 * _EPS * 180.0
+            trigger_if(np.any(np.abs(np.asarray(result) - reverse) > tol),
+                       "OB-GEO-004")
+            shifted = locations2degrees(lat1d, lon1d + 90.0,
+                                         lat2d, lon2d + 90.0)
+            trigger_if(np.any(np.abs(np.asarray(result) - shifted) > tol),
+                       "OB-GEO-005")
+    except Exception:
+        pass
+
+
+def check_mean_longitude(longitudes, result):
+    try:
+        with _checking() as run:
+            values = np.asarray(longitudes, dtype=float)
+            if (not run or values.size == 0 or not _finite(values, result) or
+                    np.any(np.abs(values) > 180)):
+                return
+            resultant = abs(np.mean(np.exp(1j * np.radians(values))))
+            if resultant <= 1e-8:
+                return
+            shifted_values = (values + 90.0 + 180.0) % 360.0 - 180.0
+            from obspy.geodetics.base import mean_longitude
+            shifted = mean_longitude(shifted_values)
+            expected = (float(result) + 90.0 + 180.0) % 360.0 - 180.0
+            tol = 4096 * _EPS * max(1, values.size) / resultant * 360.0
+            trigger_if(_circular_difference(shifted, expected) > tol,
+                       "OB-GEO-007")
+    except Exception:
+        pass
+
+
+def check_correlate(a, b, shift, normalize, method, result):
+    try:
+        with _checking() as run:
+            a = np.asarray(a)
+            b = np.asarray(b)
+            if (not run or a.ndim != 1 or b.ndim != 1 or
+                    len(a) != len(b) or len(a) == 0 or
+                    not np.issubdtype(a.dtype, np.floating) or
+                    not np.issubdtype(b.dtype, np.floating) or
+                    not _finite(a, b, result)):
+                return
+            scale_a = float(np.max(np.abs(a)))
+            scale_b = float(np.max(np.abs(b)))
+            if scale_a == 0 or scale_b == 0:
+                return
+            scaled_norm = np.sqrt(np.sum((a / scale_a) ** 2) *
+                                  np.sum((b / scale_b) ** 2))
+            if (not np.isfinite(scaled_norm) or
+                    scale_a > np.sqrt(np.finfo(float).max / len(a)) or
+                    scale_b > np.sqrt(np.finfo(float).max / len(b)) or
+                    scale_a * scale_b > np.finfo(float).max / len(a)):
+                return
+            norm = scale_a * scale_b * scaled_norm
+            from obspy.signal.cross_correlation import correlate
+            reverse = correlate(b, a, shift, demean=False,
+                                normalize=normalize, method=method)
+            output_scale = 1.0 if normalize == "naive" else max(1.0, norm)
+            tol = 512 * _EPS * max(1, len(a)) * output_scale
+            trigger_if(result.shape != reverse.shape or
+                       np.any(np.abs(result - reverse[::-1]) > tol),
+                       "OB-XCORR-001")
+
+            if normalize == "naive" and _scale(a) < np.finfo(float).max / 4:
+                scaled = correlate(2.0 * a, b, shift, demean=False,
+                                   normalize=normalize, method=method)
+                trigger_if(_different_at_scale(result, scaled, 1.0,
+                                               1024 * max(1, len(a))),
+                           "OB-XCORR-002")
+
+                direct = correlate(a, b, shift, demean=False,
+                                   normalize=normalize, method="direct")
+                fft = correlate(a, b, shift, demean=False,
+                                normalize=normalize, method="fft")
+                trigger_if(_different_at_scale(direct, fft, 1.0,
+                                               4096 * max(1, len(a))),
+                           "OB-XCORR-003")
+    except Exception:
+        pass

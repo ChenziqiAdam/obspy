@@ -252,12 +252,21 @@ def gps2dist_azimuth(lat1, lon1, lat2, lon2, a=WGS84_A, f=WGS84_F):
         if azim < 0:
             azim += 360
         bazim = result['azi2'] + 180
-        return (result['s12'], azim, bazim)
+        values = (result['s12'], azim, bazim)
+        from obspy import _scientific_checkers
+        if _scientific_checkers.enabled():
+            _scientific_checkers.check_gps2dist_azimuth(
+                lat1, lon1, lat2, lon2, a, f, values)
+        return values
     else:
         try:
             values = calc_vincenty_inverse(lat1, lon1, lat2, lon2, a, f)
             if np.all(np.isnan(values)):
                 raise StopIteration
+            from obspy import _scientific_checkers
+            if _scientific_checkers.enabled():
+                _scientific_checkers.check_gps2dist_azimuth(
+                    lat1, lon1, lat2, lon2, a, f, values)
             return values
         except StopIteration:
             msg = ("Catching unstable calculation on antipodes. "
@@ -361,6 +370,10 @@ def locations2degrees(lat1, long1, lat2, long2):
                     np.cos(lat2) * np.cos(long_diff)) ** 2),
             np.sin(lat1) * np.sin(lat2) + np.cos(lat1) * np.cos(lat2) *
             np.cos(long_diff)))
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_locations2degrees(
+            lat1, long1, lat2, long2, gd)
     return gd
 
 
@@ -382,6 +395,9 @@ def mean_longitude(longitudes):
     from scipy.stats import circmean
     mean_longitude = circmean(np.array(longitudes), low=-180, high=180)
     mean_longitude = _normalize_longitude(mean_longitude)
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_mean_longitude(longitudes, mean_longitude)
     return mean_longitude
 
 
