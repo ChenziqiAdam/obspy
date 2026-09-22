@@ -491,6 +491,9 @@ def farfield(mt, points, type):
                     psum += (gamma[n] * gamma[p] - deltanp) * m_p[p]
                 disp[n, ipoint] = psum
 
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_farfield(mt, points, type, disp)
     return disp
 
 

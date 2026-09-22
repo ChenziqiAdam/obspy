@@ -698,8 +698,14 @@ class TauPyModel(object):
                       distance_in_degree, receiver_depth_in_km,
                       ray_param_tol=ray_param_tol)
         tt.run()
-        return Arrivals(sorted(tt.arrivals, key=lambda x: x.time),
-                        model=self.model)
+        arrivals = Arrivals(sorted(tt.arrivals, key=lambda x: x.time),
+                            model=self.model)
+        from obspy import _scientific_checkers
+        if _scientific_checkers.enabled():
+            _scientific_checkers.check_taup_travel_times(
+                self, source_depth_in_km, distance_in_degree, phase_list,
+                receiver_depth_in_km, ray_param_tol, arrivals)
+        return arrivals
 
     def get_pierce_points(self, source_depth_in_km, distance_in_degree,
                           phase_list=("ttall",), receiver_depth_in_km=0.0,
@@ -768,8 +774,12 @@ class TauPyModel(object):
                       distance_in_degree, receiver_depth_in_km,
                       ray_param_tol=ray_param_tol)
         rp.run()
-        return Arrivals(sorted(rp.arrivals, key=lambda x: x.time),
-                        model=self.model)
+        arrivals = Arrivals(sorted(rp.arrivals, key=lambda x: x.time),
+                            model=self.model)
+        from obspy import _scientific_checkers
+        if _scientific_checkers.enabled():
+            _scientific_checkers.check_taup_ray_paths(arrivals, ray_param_tol)
+        return arrivals
 
     def get_travel_times_geo(self, source_depth_in_km, source_latitude_in_deg,
                              source_longitude_in_deg, receiver_latitude_in_deg,

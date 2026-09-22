@@ -599,6 +599,11 @@ def array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs, array_coords,
 
     out['ts_m'] = ts_m
 
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_array_rotation_strain(
+            subarray, ts1, ts2, ts3, vp, vs, array_coords, sigmau, out)
+
     return out
 
 

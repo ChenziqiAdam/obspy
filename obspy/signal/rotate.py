@@ -47,6 +47,10 @@ def rotate_ne_rt(n, e, ba):
     ba = radians(ba)
     r = - e * sin(ba) - n * cos(ba)
     t = - e * cos(ba) + n * sin(ba)
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_rotate_ne_rt(n, e, ba * 180 / np.pi,
+                                                r, t)
     return r, t
 
 
@@ -109,6 +113,10 @@ def rotate_zne_lqt(z, n, e, ba, inc):
     l = z * cos(inc) - n * sin(inc) * cos(ba) - e * sin(inc) * sin(ba)  # NOQA
     q = z * sin(inc) + n * cos(inc) * cos(ba) + e * cos(inc) * sin(ba)  # NOQA
     t = n * sin(ba) - e * cos(ba)  # NOQA
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_rotate_zne_lqt(
+            z, n, e, ba * 180 / np.pi, inc * 180 / np.pi, l, q, t)
     return l, q, t
 
 
@@ -242,6 +250,13 @@ def rotate2zne(data_1, azimuth_1, dip_1, data_2, azimuth_2, dip_2, data_3,
     n[n == -0.0] = 0
     e = np.array(e).ravel()
     e[e == -0.0] = 0
+
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_rotate2zne(
+            (data_1, data_2, data_3),
+            ((azimuth_1, dip_1), (azimuth_2, dip_2),
+             (azimuth_3, dip_3)), inverse, (z, n, e))
 
     return z, n, e
 

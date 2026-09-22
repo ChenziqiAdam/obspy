@@ -117,7 +117,13 @@ def eigval(datax, datay, dataz, fk, normf=1.0):
     dplan = signal.lfilter(fk, 1, plan_add)
     dplan = dplan[len(fk) - 1:]
 
-    return leigenv1, leigenv2, leigenv3, rect, plan, dleigenv, drect, dplan
+    result = (leigenv1, leigenv2, leigenv3, rect, plan, dleigenv, drect,
+              dplan)
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_eigval(datax, datay, dataz, fk, normf,
+                                          result)
+    return result
 
 
 def flinn(stream, noise_thres=0):
@@ -165,7 +171,11 @@ def flinn(stream, noise_thres=0):
     if azimuth > 180.0:
         azimuth -= 180.0
 
-    return azimuth, incidence, rect, plan
+    result = (azimuth, incidence, rect, plan)
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_flinn(stream, noise_thres, result)
+    return result
 
 
 def instantaneous_frequency(data, sampling_rate):

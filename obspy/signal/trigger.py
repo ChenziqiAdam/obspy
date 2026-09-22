@@ -60,6 +60,9 @@ def recursive_sta_lta(a, nsta, nlta):
     charfct = np.empty(ndat, dtype=np.float64)
     # do not use pointer here:
     clibsignal.recstalta(a, charfct, ndat, nsta, nlta)
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_recursive_sta_lta(a, nsta, nlta, charfct)
     return charfct
 
 
@@ -187,6 +190,9 @@ def classic_sta_lta(a, nsta, nlta):
     errcode = clibsignal.stalta(head, data, charfct)
     if errcode != 0:
         raise Exception('ERROR %d stalta: len(data) < nlta' % errcode)
+    from obspy import _scientific_checkers
+    if _scientific_checkers.enabled():
+        _scientific_checkers.check_classic_sta_lta(data, nsta, nlta, charfct)
     return charfct
 
 
