@@ -5,8 +5,8 @@
   "base_tag": "1.5.1",
   "fork_repository": null,
   "fork_branch": "scibench-scientific-checkers-pilot",
-  "instrumented_commit": "3a8ecaa21a34ea1a7e6ef1427ea55772af117b51",
-  "note": "Instrumentation commit on a local pilot branch; not pushed. Laws were frozen before triggerability analysis.",
+  "instrumented_commit": "917ffb2272f8852a26af02551c7d6fcb54a6f12f",
+  "note": "Expanded instrumentation commit on a local pilot branch; not pushed. Laws were frozen before triggerability analysis.",
   "sanitizers": [
     {"id":"OB-ROT-001","family":"horizontal_component_rotation","source":"obspy/signal/rotate.py","symbol":"rotate_ne_rt","scientific_quantity":"horizontal ground-motion components","precondition":"Equal-length finite floating N/E arrays, back-azimuth in [0,360], and bounded dynamic range.","invariant":"N/E to R/T and back through rotate_rt_ne recovers both components.","observation_point":"After rotate_ne_rt computes R/T.","alarm":"Condition-aware round-trip error exceeds a float64 operation bound.","rationale":"A failed inverse changes inferred radial and transverse motion."},
     {"id":"OB-ROT-002","family":"horizontal_component_rotation","source":"obspy/signal/rotate.py","symbol":"rotate_ne_rt","scientific_quantity":"horizontal vector energy","precondition":"OB-ROT-001 domain with squared norms representable in float64.","invariant":"An orthonormal N/E to R/T basis change preserves per-sample squared norm.","observation_point":"After rotate_ne_rt computes R/T.","alarm":"R/T and N/E squared norms differ beyond accumulated float64 error.","rationale":"Coordinate rotation cannot create or destroy ground-motion amplitude."},
