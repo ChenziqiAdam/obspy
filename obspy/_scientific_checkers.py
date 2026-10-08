@@ -48,9 +48,18 @@ def _checking():
     try:
         # A checker re-calls public APIs on transformed inputs; warnings raised
         # by those calls must never reach the user's code.
-        with warnings.catch_warnings(), np.errstate(all="ignore"):
-            warnings.simplefilter("ignore")
-            yield True
+        # (inserted directly: catch_warnings would reset every module's
+        # once-per-location warning registry)
+        flt = ("ignore", None, Warning, None, 0)
+        warnings.filters.insert(0, flt)
+        try:
+            with np.errstate(all="ignore"):
+                yield True
+        finally:
+            try:
+                warnings.filters.remove(flt)
+            except ValueError:
+                pass
     finally:
         _ACTIVE = False
 
