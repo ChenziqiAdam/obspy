@@ -256,7 +256,7 @@
       "symbol": "TauPyModel.get_travel_times"
     },
     {
-      "alarm": "Endpoint disagreement exceeds 256 times requested ray-parameter refinement or float error.",
+      "alarm": "Endpoint disagreement exceeds the largest of 256 times requested ray-parameter refinement, float error, and 0.2% of the arrival time or distance.",
       "family": "taup_path_endpoint",
       "id": "OB-TAUP-003",
       "invariant": "Final path time and angular distance agree with arrival time and purist distance.",

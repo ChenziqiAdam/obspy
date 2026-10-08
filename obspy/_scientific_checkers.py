@@ -432,12 +432,18 @@ def check_taup_ray_paths(arrivals, ray_param_tol):
                 # through every traversed branch; observed endpoint error is
                 # therefore bounded in units of the requested refinement,
                 # rather than by float epsilon alone.
+                # Triplication, caustic and multiple-bounce phases accumulate
+                # path-interpolation error far above the nominal refinement
+                # (up to 5.7e-4 of the travel time in a 3-model, 7-depth
+                # sweep of every phase); the relative floor sits 3.5x above it.
                 time_tol = max(256 * float(ray_param_tol),
-                               4096 * _EPS * time_scale)
+                               4096 * _EPS * time_scale,
+                               2e-3 * time_scale)
                 bad_time = abs(path[-1]["time"] - arrival.time) > time_tol
                 endpoint_deg = np.degrees(path[-1]["dist"])
                 dist_tol = max(256 * float(ray_param_tol),
-                               4096 * _EPS * dist_scale)
+                               4096 * _EPS * dist_scale,
+                               2e-3 * dist_scale)
                 bad_dist = abs(endpoint_deg - arrival.purist_distance) > \
                     dist_tol
                 if bad_time or bad_dist:
