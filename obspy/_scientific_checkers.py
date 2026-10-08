@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from contextlib import contextmanager
 
 import numpy as np
@@ -45,7 +46,11 @@ def _checking():
         return
     _ACTIVE = True
     try:
-        yield True
+        # A checker re-calls public APIs on transformed inputs; warnings raised
+        # by those calls must never reach the user's code.
+        with warnings.catch_warnings(), np.errstate(all="ignore"):
+            warnings.simplefilter("ignore")
+            yield True
     finally:
         _ACTIVE = False
 
