@@ -385,7 +385,15 @@ class TestCrossCorrelation:
         tmpl = data[50:80]
         cc_t1 = correlate_template(data, tmpl, normalize='naive')
         cc_t2 = correlate_template(data, 2 * tmpl, normalize='naive')
+        assert np.count_nonzero(cc_t1) > 0
         np.testing.assert_allclose(cc_t1, cc_t2)
+        for demean in (True, False):
+            cc_f1 = correlate_template(data, tmpl, demean=demean)
+            cc_f2 = correlate_template(data, 2 * tmpl, demean=demean)
+            cc_f3 = correlate_template(data * 1e6, tmpl, demean=demean)
+            assert np.count_nonzero(cc_f1) > 0
+            np.testing.assert_allclose(cc_f1, cc_f2, atol=1e-10)
+            np.testing.assert_allclose(cc_f1, cc_f3, atol=1e-10)
 
     def test_correlate_template_nodemean_fastmatchedfilter(self):
         """

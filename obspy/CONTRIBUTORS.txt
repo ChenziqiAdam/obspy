@@ -24,6 +24,7 @@ Carothers, Lloyd
 Chamberlain, Calum
 Chambers, Derrick
 Chen, Zhao
+Chen, Ziqi
 Clark, Adam
 Crawford, Wayne
 Crotwell, Philip
@@ -142,4 +143,3 @@ Zaccarelli, Riccardo
 Zacherle, Pavel
 Zad, Seyed Kasra Hosseini
 Zhu, Lijun
-Chen, Ziqi
