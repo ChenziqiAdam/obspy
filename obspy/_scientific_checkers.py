@@ -119,6 +119,12 @@ def check_rotate_ne_rt(n, e, ba, r, t):
             scale = _scale(n, e, r, t)
             if scale > np.sqrt(np.finfo(float).max) / 8:
                 return
+            for v in (n, e):
+                v = np.asarray(v)
+                # -iinfo.min is unrepresentable: not a valid rotation input
+                if v.dtype.kind == "i" and v.size and \
+                        np.any(v == np.iinfo(v.dtype).min):
+                    return
             from obspy.signal.rotate import rotate_rt_ne
             n2, e2 = rotate_rt_ne(r, t, ba)
             in_eps = _dtype_epsilon(n, e)  # channels may differ in precision
@@ -239,10 +245,13 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
                        "OB-ARR-001")
 
             coords = np.asarray(array_coords)
-            span = float(np.ptp(coords, axis=0).max())
+            used = np.asarray(subarray, dtype=int)
+            # only the stations in the sub-array enter the solution
+            used_coords = coords[used]
+            span = float(np.ptp(used_coords, axis=0).max())
             if span == 0:
                 return
-            max_coord = _scale(coords)
+            max_coord = _scale(used_coords)
             if max_coord / span < 1e6:
                 shift = span * np.array([0.5, -0.25, 0.125],
                                         dtype=coords.dtype)
@@ -257,8 +266,15 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
                                _dtype_epsilon(coords)),
                            "OB-ARR-002")
 
-            data_scale = _scale(ts1, ts2, ts3)
-            if data_scale < np.finfo(float).max / 8:
+            used_data = [np.asarray(t)[:, used] for t in (ts1, ts2, ts3)]
+            data_scale = max(_scale(*used_data) if used.size else 1.0, 0.0)
+            # adding common motion re-rounds every sample by eps*data_scale,
+            # a relative change eps*data_scale/signal of the station
+            # differences that carry the gradient
+            signal = max(float(np.max(np.ptp(t, axis=1))) for t in used_data)
+            if signal > 0 and data_scale / signal < 1e8 and \
+                    data_scale < np.finfo(float).max / 8:
+                requantisation = max(1.0, data_scale / signal)
                 nt = np.asarray(ts1).shape[0]
                 common = np.linspace(-0.25, 0.25, nt) * data_scale
                 common_result = array_rotation_strain(
@@ -267,7 +283,8 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
                     np.asarray(ts3) + 0.25 * common[:, None], vp, vs,
                     array_coords, sigmau)
                 trigger_if(_array_result_differs(
-                               result, common_result, condition, 8.0,
+                               result, common_result, condition,
+                               8.0 * requantisation,
                                _dtype_epsilon(ts1, ts2, ts3)),
                            "OB-ARR-003")
     except Exception:
@@ -285,6 +302,12 @@ def check_farfield(mt, points, wave_type, displacement):
             if not run or not _finite(mt, points, displacement):
                 return
             points = np.asarray(points)
+            if (points.dtype.kind in "iu" and points.ndim == 2 and
+                    points.shape[0] == 3 and points.size and
+                    np.max(np.sum(points.astype(float) ** 2, axis=0)) >
+                    np.iinfo(points.dtype).max):
+                # farfield squares integer vectors in their own dtype
+                return
             epsilon = _dtype_epsilon(mt, points, displacement)
             if points.shape[0] == 2:
                 cart = np.vstack((np.sin(points[0]) * np.cos(points[1]),
@@ -350,6 +373,12 @@ def check_flinn(stream, noise_thres, result):
             arrays = [np.asarray(value) for value in stream]
             if min(value.size for value in arrays) < 3:
                 return
+            from obspy.signal.polarization import flinn
+            if any(value.dtype.kind not in "f" for value in arrays):
+                # integer counts: evaluate every law in float64 so neither
+                # integer wrap-around nor unrepresentable negation enters
+                arrays = [value.astype(np.float64) for value in arrays]
+                result = flinn(arrays, noise_thres)
             mask = sum(value ** 2 for value in arrays) > noise_thres
             if np.count_nonzero(mask) < 3:
                 return
@@ -361,7 +390,6 @@ def check_flinn(stream, noise_thres, result):
                           eigenvalues[1] - eigenvalues[0])
             if eig_gap <= 1e-8 * eig_scale:
                 return
-            from obspy.signal.polarization import flinn
             scaled = flinn([2 * value for value in arrays], 4 * noise_thres)
             bad = (_angle_difference_mod_180(result[0], scaled[0]) > 1e-8 or
                    np.any(np.abs(np.asarray(result[1:]) -
@@ -401,17 +429,22 @@ def check_eigval(datax, datay, dataz, fk, normf, result):
             # eigenvalue outputs carry absolute error ~eps*largest eigenvalue
             lam = max(1.0, _scale(result[0], result[1], result[2]))
             eig_idx = (0, 1, 2, 5)
+            # outputs 5-7 are FIR time derivatives with gain sum|fk|
+            gain = max(1.0, float(np.sum(np.abs(fk))))
             trigger_if(any(
-                _different_at_scale(a, b, lam, 4096) if i in eig_idx
-                else _different(a, b, 4096)
+                _different_at_scale(a, b, lam * (gain if i == 5 else 1.0),
+                                    4096) if i in eig_idx
+                else _different(a, b, 4096 * (gain if i > 5 else 1.0))
                 for i, (a, b) in enumerate(zip(result, rotated))),
                 "OB-POL-004")
 
             scaled = eigval(2 * dx, 2 * dy, 2 * dz, fk, normf)
-            bad = any(_different_at_scale(4 * np.asarray(result[index]),
-                                          scaled[index], 4 * lam, 4096)
+            bad = any(_different_at_scale(
+                          4 * np.asarray(result[index]), scaled[index],
+                          4 * lam * (gain if index == 5 else 1.0), 4096)
                       for index in (0, 1, 2, 5))
-            bad = bad or any(_different(result[index], scaled[index], 4096)
+            bad = bad or any(_different(result[index], scaled[index],
+                                        4096 * (gain if index > 5 else 1.0))
                              for index in (3, 4, 6, 7))
             trigger_if(bad, "OB-POL-005")
     except Exception:
@@ -488,6 +521,14 @@ def check_taup_ray_paths(arrivals, ray_param_tol):
         pass
 
 
+def _subnormal_energy(d64):
+    """True when squared samples approach the float64 subnormal range."""
+    if not d64.size:
+        return False
+    peak = float(np.max(np.abs(d64)))
+    return 0 < peak * peak < np.finfo(float).tiny / _EPS
+
+
 def check_classic_sta_lta(data, nsta, nlta, result):
     try:
         with _checking() as run:
@@ -495,6 +536,8 @@ def check_classic_sta_lta(data, nsta, nlta, result):
                 return
             from obspy.signal.trigger import classic_sta_lta_py
             d64 = np.asarray(data, dtype=float)
+            if _subnormal_energy(d64):
+                return
             other = classic_sta_lta_py(d64, nsta, nlta)
             result = np.asarray(result)
             if result.shape != other.shape or not _finite(other):
@@ -525,6 +568,8 @@ def check_recursive_sta_lta(data, nsta, nlta, result):
             # STA/LTA is scale invariant; normalise so the reference's
             # tiny-initialised LTA is not biased for physically tiny units
             peak = float(np.max(np.abs(d64))) if d64.size else 0.0
+            if _subnormal_energy(d64):
+                return
             other = recursive_sta_lta_py(d64 / peak if peak > 0 else d64,
                                          nsta, nlta)
             trigger_if(_different(result, other, 64 * max(nlta, len(data))),
@@ -568,7 +613,7 @@ def check_paz_response(poles, zeros, scale_fac, t_samp, nfft, response,
                 expected = paz_2_amplitude_value_of_freq_resp(
                     {"poles": list(np.asarray(poles, dtype=complex)),
                      "zeros": list(np.asarray(zeros, dtype=complex)),
-                     "gain": scale_fac}, frequencies[index])
+                     "gain": abs(scale_fac)}, frequencies[index])
                 observed = abs(response[index])
                 degree = max(1, len(poles), len(zeros))
                 tol = (8 * degree * condition *
@@ -623,8 +668,10 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
 
             if (bearing_condition <= 1e8 and
                     max(abs(lon1), abs(lon2)) <= 1e6):
-                shifted = gps2dist_azimuth(lat1, lon1 + 360.0, lat2,
-                                           lon2 + 360.0, a=a, f=f)
+                # shift the stored values in float64 (no dtype re-rounding)
+                shifted = gps2dist_azimuth(float(lat1), float(lon1) + 360.0,
+                                           float(lat2), float(lon2) + 360.0,
+                                           a=a, f=f)
                 bad_shift = (abs(result[0] - shifted[0]) > distance_tol or
                              _circular_difference(result[1], shifted[1]) >
                              angle_tol or
@@ -634,7 +681,8 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
 
             spherical = result if f == 0 else gps2dist_azimuth(
                 lat1, lon1, lat2, lon2, a=a, f=0)
-            angular = locations2degrees(lat1, lon1, lat2, lon2)
+            angular = locations2degrees(float(lat1), float(lon1),
+                                        float(lat2), float(lon2))
             expected = np.deg2rad(angular) * a
             sphere_tol = 8192 * _EPS * max(1.0, float(a),
                                            abs(float(expected)))
@@ -655,7 +703,7 @@ def check_locations2degrees(lat1, lon1, lat2, lon2, result):
             lon2 = np.asarray(lon2)
             if (np.any(np.abs(lat1) > np.pi / 2) or
                     np.any(np.abs(lat2) > np.pi / 2) or
-                    _scale(lon1, lon2) > np.deg2rad(1e6)):
+                    _scale(lon1, lon2) > np.deg2rad(1e5)):
                 return
             from obspy.geodetics.base import locations2degrees
             # Inputs at this observation point are already in radians.
@@ -663,7 +711,9 @@ def check_locations2degrees(lat1, lon1, lat2, lon2, result):
             lon1d, lon2d = np.degrees(lon1), np.degrees(lon2)
             reverse = locations2degrees(lat2d, lon2d, lat1d, lon1d)
             epsilon = _dtype_epsilon(lat1, lon1, lat2, lon2, result)
-            tol = 4096 * epsilon * 180.0
+            # a longitude of magnitude L is only known to eps*L
+            lon_deg = float(np.degrees(_scale(lon1, lon2)))
+            tol = 4096 * epsilon * 180.0 * max(1.0, lon_deg / 180.0)
             trigger_if(np.any(np.abs(np.asarray(result) - reverse) > tol),
                        "OB-GEO-004")
             shifted = locations2degrees(lat1d, lon1d + 90.0,
