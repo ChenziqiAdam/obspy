@@ -7,7 +7,7 @@ Changes:
      scipy >=1.15 and matplotlib >=3.9 (see #3570)
  - obspy.signal:
    * cross correlation: fix normalized correlation for small amplitude
-     signals
+     signals. Normalization is now only skipped if the norm is exactly zero
      (see #3817)
    * spectral estimation: add getter functions for rotational noise models
      (see #3732)

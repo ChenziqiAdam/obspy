@@ -287,12 +287,11 @@ def correlate_template(data, template, mode='valid', normalize='full',
             else:
                 norm = _window_sum(data ** 2, lent)
             norm *= tnorm
-            mask = norm <= np.finfo(float).eps * tnorm * np.sum(data ** 2)
-            norm[mask] = 0
             if norm.dtype == float:
                 np.sqrt(norm, out=norm)
             else:
                 norm = np.sqrt(norm)
+            mask = norm == 0
             if cc.dtype == float:
                 cc[~mask] /= norm[~mask]
             else:
