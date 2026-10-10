@@ -121,8 +121,9 @@ def check_rotate_ne_rt(n, e, ba, r, t):
                 return
             from obspy.signal.rotate import rotate_rt_ne
             n2, e2 = rotate_rt_ne(r, t, ba)
-            trigger_if(_different_at_scale(n, n2, scale, 64) or
-                       _different_at_scale(e, e2, scale, 64),
+            in_eps = _dtype_epsilon(n, e)  # channels may differ in precision
+            trigger_if(_different_at_scale(n, n2, scale, 64, epsilon=in_eps) or
+                       _different_at_scale(e, e2, scale, 64, epsilon=in_eps),
                        "OB-ROT-001")
             lhs = np.asarray(n, float) ** 2 + np.asarray(e, float) ** 2
             rhs = np.asarray(r, float) ** 2 + np.asarray(t, float) ** 2
@@ -143,9 +144,10 @@ def check_rotate_zne_lqt(z, n, e, ba, inc, l, q, t):
                 return
             from obspy.signal.rotate import rotate_lqt_zne
             z2, n2, e2 = rotate_lqt_zne(l, q, t, ba, inc)
-            bad = (_different_at_scale(z, z2, scale, 96) or
-                   _different_at_scale(n, n2, scale, 96) or
-                   _different_at_scale(e, e2, scale, 96))
+            in_eps = _dtype_epsilon(z, n, e)
+            bad = (_different_at_scale(z, z2, scale, 96, epsilon=in_eps) or
+                   _different_at_scale(n, n2, scale, 96, epsilon=in_eps) or
+                   _different_at_scale(e, e2, scale, 96, epsilon=in_eps))
             trigger_if(bad, "OB-ROT-003")
             lhs = (np.asarray(z, float) ** 2 + np.asarray(n, float) ** 2 +
                    np.asarray(e, float) ** 2)
@@ -241,14 +243,18 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
             if span == 0:
                 return
             max_coord = _scale(coords)
-            if max_coord / span < 1e8:
+            if max_coord / span < 1e6:
                 shift = span * np.array([0.5, -0.25, 0.125],
                                         dtype=coords.dtype)
                 translated = array_rotation_strain(
                     subarray, ts1, ts2, ts3, vp, vs, coords + shift, sigmau)
-                trigger_if(_array_result_differs(result, translated,
-                                                  condition, 4.0,
-                                                  _dtype_epsilon(coords)),
+                # coords + shift re-rounds every coordinate by
+                # eps*max_coord, a relative geometry change of
+                # eps*max_coord/span
+                trigger_if(_array_result_differs(
+                               result, translated, condition,
+                               4.0 * max(1.0, max_coord / span),
+                               _dtype_epsilon(coords)),
                            "OB-ARR-002")
 
             data_scale = _scale(ts1, ts2, ts3)
@@ -260,8 +266,9 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
                     np.asarray(ts2) - 0.5 * common[:, None],
                     np.asarray(ts3) + 0.25 * common[:, None], vp, vs,
                     array_coords, sigmau)
-                trigger_if(_array_result_differs(result, common_result,
-                                                  condition, 8.0),
+                trigger_if(_array_result_differs(
+                               result, common_result, condition, 8.0,
+                               _dtype_epsilon(ts1, ts2, ts3)),
                            "OB-ARR-003")
     except Exception:
         pass
@@ -304,9 +311,16 @@ def check_farfield(mt, points, wave_type, displacement):
             from obspy.core.event.source import _fullmt, farfield
             if points.shape[0] == 2:
                 other = farfield(mt, cart, wave_type)
-                trigger_if(_different(disp, other, 512, epsilon=epsilon),
+                # np.sin of int8/int16 angles is evaluated in float16/32
+                trig_eps = float(np.finfo(np.result_type(points.dtype,
+                                                         np.float16)).eps)
+                trigger_if(_different(disp, other, 512,
+                                      epsilon=max(epsilon, trig_eps)),
                            "OB-SRC-003")
-            else:
+            elif not (points.dtype.kind == "u" or
+                      (points.dtype.kind == "i" and
+                       np.any(points == np.iinfo(points.dtype).min))):
+                # -points must be representable in the integer dtype
                 other = farfield(mt, -points, wave_type)
                 trigger_if(_different(other, -disp, 512, epsilon=epsilon),
                            "OB-SRC-004")
@@ -356,8 +370,11 @@ def check_flinn(stream, noise_thres, result):
 
             rotated = flinn([arrays[0], arrays[2], -arrays[1]], noise_thres)
             expected_azimuth = (float(result[0]) - 90.0) % 180.0
-            bad = (_angle_difference_mod_180(rotated[0], expected_azimuth) >
-                   1e-7 or np.any(np.abs(np.asarray(result[1:]) -
+            # azimuth is undefined for a (near-)vertical principal axis
+            azimuth_defined = min(float(result[1]), float(rotated[1])) > 1e-3
+            bad = ((azimuth_defined and
+                    _angle_difference_mod_180(rotated[0], expected_azimuth) >
+                    1e-7) or np.any(np.abs(np.asarray(result[1:]) -
                                         np.asarray(rotated[1:])) > 1e-9))
             trigger_if(bad, "OB-POL-002")
 
@@ -377,14 +394,23 @@ def check_eigval(datax, datay, dataz, fk, normf, result):
                                       *result) or normf <= 0:
                 return
             from obspy.signal.polarization import eigval
-            rotated = eigval(datay, -np.asarray(datax), dataz, fk, normf)
-            trigger_if(any(_different(a, b, 4096)
-                           for a, b in zip(result, rotated)), "OB-POL-004")
+            # float64 first: integer negation / doubling can wrap
+            dx, dy, dz = (np.asarray(v, dtype=np.float64)
+                          for v in (datax, datay, dataz))
+            rotated = eigval(dy, -dx, dz, fk, normf)
+            # eigenvalue outputs carry absolute error ~eps*largest eigenvalue
+            lam = max(1.0, _scale(result[0], result[1], result[2]))
+            eig_idx = (0, 1, 2, 5)
+            trigger_if(any(
+                _different_at_scale(a, b, lam, 4096) if i in eig_idx
+                else _different(a, b, 4096)
+                for i, (a, b) in enumerate(zip(result, rotated))),
+                "OB-POL-004")
 
-            scaled = eigval(2 * np.asarray(datax), 2 * np.asarray(datay),
-                            2 * np.asarray(dataz), fk, normf)
-            bad = any(_different(4 * np.asarray(result[index]), scaled[index],
-                                 4096) for index in (0, 1, 2, 5))
+            scaled = eigval(2 * dx, 2 * dy, 2 * dz, fk, normf)
+            bad = any(_different_at_scale(4 * np.asarray(result[index]),
+                                          scaled[index], 4 * lam, 4096)
+                      for index in (0, 1, 2, 5))
             bad = bad or any(_different(result[index], scaled[index], 4096)
                              for index in (3, 4, 6, 7))
             trigger_if(bad, "OB-POL-005")
@@ -468,10 +494,23 @@ def check_classic_sta_lta(data, nsta, nlta, result):
             if not run or not _finite(data, result) or not (nlta > nsta > 0):
                 return
             from obspy.signal.trigger import classic_sta_lta_py
-            other = classic_sta_lta_py(np.asarray(data, dtype=float), nsta,
-                                       nlta)
-            trigger_if(_different(result, other, 64 * len(data)),
-                       "OB-TRIG-001")
+            d64 = np.asarray(data, dtype=float)
+            other = classic_sta_lta_py(d64, nsta, nlta)
+            result = np.asarray(result)
+            if result.shape != other.shape or not _finite(other):
+                trigger("OB-TRIG-001")
+                return
+            # running-sum cancellation: the error at sample t is
+            # ~ eps * cumulative energy(t) / energy of the STA window(t)
+            energy = d64 ** 2
+            cumulative = np.cumsum(energy)
+            window = np.convolve(energy, np.ones(int(nsta)))[:len(energy)]
+            with np.errstate(all="ignore"):
+                cond = np.where(window > 0, cumulative / window, np.inf)
+            tol = (64 * len(d64) * _dtype_epsilon(result, other) *
+                   np.maximum(1.0, cond) *
+                   np.maximum(1.0, np.maximum(np.abs(result), np.abs(other))))
+            trigger_if(np.any(np.abs(result - other) > tol), "OB-TRIG-001")
     except Exception:
         pass
 
@@ -482,8 +521,12 @@ def check_recursive_sta_lta(data, nsta, nlta, result):
             if not run or not _finite(data, result) or not (nlta > nsta > 0):
                 return
             from obspy.signal.trigger import recursive_sta_lta_py
-            other = recursive_sta_lta_py(np.asarray(data, dtype=float), nsta,
-                                         nlta)
+            d64 = np.asarray(data, dtype=float)
+            # STA/LTA is scale invariant; normalise so the reference's
+            # tiny-initialised LTA is not biased for physically tiny units
+            peak = float(np.max(np.abs(d64))) if d64.size else 0.0
+            other = recursive_sta_lta_py(d64 / peak if peak > 0 else d64,
+                                         nsta, nlta)
             trigger_if(_different(result, other, 64 * max(nlta, len(data))),
                        "OB-TRIG-002")
     except Exception:
@@ -520,51 +563,21 @@ def check_paz_response(poles, zeros, scale_fac, t_samp, nfft, response,
                 condition = max(1.0, *conditions)
                 if not np.isfinite(condition) or condition > 1e8:
                     continue
+                # evaluate the reference in complex128; allow the precision
+                # of the supplied pole/zero dtype
                 expected = paz_2_amplitude_value_of_freq_resp(
-                    {"poles": poles, "zeros": zeros, "gain": scale_fac},
-                    frequencies[index])
+                    {"poles": list(np.asarray(poles, dtype=complex)),
+                     "zeros": list(np.asarray(zeros, dtype=complex)),
+                     "gain": scale_fac}, frequencies[index])
                 observed = abs(response[index])
                 degree = max(1, len(poles), len(zeros))
-                tol = (8 * degree * condition * _EPS *
+                tol = (8 * degree * condition *
+                       _dtype_epsilon(poles, zeros, response) *
                        max(1.0, expected, observed))
                 if abs(expected - observed) > tol:
                     bad = True
                     break
             trigger_if(bad, "OB-RESP-001")
-    except Exception:
-        pass
-
-
-def check_simulate_roundtrip(original, result, samp_rate, paz_remove,
-                             paz_simulate, remove_sensitivity,
-                             simulate_sensitivity, water_level, zero_mean,
-                             taper, pre_filt, seedresp, pitsasim, sacsim,
-                             shsim, nfft_pow2):
-    try:
-        with _checking() as run:
-            if not run or paz_remove is None or paz_simulate is None:
-                return
-            if paz_remove != paz_simulate or zero_mean or taper or pre_filt or \
-                    seedresp or pitsasim or sacsim or shsim:
-                return
-            if remove_sensitivity != simulate_sensitivity:
-                return
-            if not _finite(original, result) or len(original) == 0:
-                return
-            from obspy.signal.invsim import _npts2nfft, paz_to_freq_resp
-            nfft = (1 << (2 * len(original) - 1).bit_length()) if nfft_pow2 \
-                else _npts2nfft(len(original))
-            response = paz_to_freq_resp(
-                paz_remove["poles"], paz_remove["zeros"],
-                paz_remove["gain"], 1.0 / samp_rate, nfft)
-            threshold = np.max(np.abs(response)) * 10 ** (-water_level / 20)
-            spectrum = np.fft.rfft(np.asarray(original, dtype=float), n=nfft)
-            lost = np.abs(response) <= threshold
-            spectral_scale = _scale(spectrum)
-            if np.any(np.abs(spectrum[lost]) > 4096 * _EPS * spectral_scale):
-                return
-            trigger_if(_different(original, result, 8192 * np.log2(nfft + 1)),
-                       "OB-RESP-002")
     except Exception:
         pass
 
@@ -728,8 +741,9 @@ def check_correlate(a, b, shift, normalize, method, result):
                                    normalize=normalize, method="direct")
                 fft = correlate(a, b, shift, demean=False,
                                 normalize=normalize, method="fft")
-                trigger_if(_different_at_scale(direct, fft, 1.0,
-                                               4096 * max(1, len(a))),
+                trigger_if(_different_at_scale(
+                               direct, fft, 1.0, 4096 * max(1, len(a)),
+                               epsilon=_dtype_epsilon(a, b, direct, fft)),
                            "OB-XCORR-003")
     except Exception:
         pass

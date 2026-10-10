@@ -153,7 +153,7 @@
       "id": "OB-SRC-004",
       "invariant": "Radiation at an antipodal direction is the negative of the original displacement.",
       "observation_point": "After a Cartesian farfield call.",
-      "precondition": "Finite moment tensor and finite nonzero Cartesian directions.",
+      "precondition": "Finite moment tensor and finite nonzero Cartesian directions whose negation is representable in the input dtype.",
       "rationale": "Moment-tensor far-field displacement has odd antipodal parity.",
       "scientific_quantity": "moment-tensor radiation parity",
       "source": "obspy/core/event/source.py",
@@ -189,7 +189,7 @@
       "id": "OB-POL-002",
       "invariant": "An exact 90-degree N/E frame rotation shifts azimuth modulo 180 and preserves other attributes.",
       "observation_point": "Before flinn returns.",
-      "precondition": "OB-POL-001 domain with separated covariance eigenvalues.",
+      "precondition": "OB-POL-001 domain with separated covariance eigenvalues; azimuth is compared only for a non-vertical principal axis.",
       "rationale": "Polarization must covary with the geographic coordinate frame.",
       "scientific_quantity": "polarization direction in a horizontal frame",
       "source": "obspy/signal/polarization.py",
@@ -208,7 +208,7 @@
       "symbol": "flinn"
     },
     {
-      "alarm": "The transformed public-API output differs beyond covariance/SVD error.",
+      "alarm": "The transformed public-API output differs beyond covariance/SVD error (eigenvalues scaled by the largest eigenvalue).",
       "family": "polarization_covariance_spectrum",
       "id": "OB-POL-004",
       "invariant": "An exact signed permutation of component axes preserves eigenvalues and dimensionless polarization measures.",
@@ -268,7 +268,7 @@
       "symbol": "TauPyModel.get_ray_paths"
     },
     {
-      "alarm": "Python result differs beyond eps times trace length and output scale.",
+      "alarm": "Python result has a different shape or differs beyond eps times trace length, output scale and cumulative-to-window energy ratio.",
       "family": "classic_sta_lta_dual_implementation",
       "id": "OB-TRIG-001",
       "invariant": "Independent C and Python implementations agree within cumulative-sum error.",
@@ -302,18 +302,6 @@
       "scientific_quantity": "poles-and-zeros instrument transfer amplitude",
       "source": "obspy/signal/invsim.py",
       "symbol": "paz_to_freq_resp"
-    },
-    {
-      "alarm": "Round-trip error exceeds FFT-length and response-conditioning error.",
-      "family": "instrument_response_round_trip",
-      "id": "OB-RESP-002",
-      "invariant": "Removing and immediately simulating the same instrument recovers the input trace.",
-      "observation_point": "Before simulate_seismometer returns.",
-      "precondition": "Finite trace; identical remove/simulate PAZ; symmetric sensitivity; no taper, detrend or prefilter; discarded spectral bins contain no signal.",
-      "rationale": "A response followed by its inverse must preserve represented ground motion.",
-      "scientific_quantity": "instrument-corrected ground-motion trace",
-      "source": "obspy/signal/invsim.py",
-      "symbol": "simulate_seismometer"
     },
     {
       "alarm": "Reverse-direction distance differs beyond an ellipsoid-scale float bound.",

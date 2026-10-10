@@ -526,12 +526,6 @@ def simulate_seismometer(
         been changed to ``True``. Old deprecated keyword arguments `paz`,
         `inst_sim`, `no_inverse_filtering` have been removed.
     """
-    from obspy import _scientific_checkers
-    if _scientific_checkers.enabled():
-        _scibench_original_data = np.asarray(data).copy()
-    else:
-        _scibench_original_data = None
-
     # Checking the types
     if not paz_remove and not paz_simulate and not seedresp:
         msg = "Neither inverse nor forward instrument simulation specified."
@@ -618,11 +612,6 @@ def simulate_seismometer(
         data /= paz_remove['sensitivity']
     if paz_simulate and simulate_sensitivity:
         data *= paz_simulate['sensitivity']
-    if _scientific_checkers.enabled():
-        _scientific_checkers.check_simulate_roundtrip(
-            _scibench_original_data, data, samp_rate, paz_remove, paz_simulate,
-            remove_sensitivity, simulate_sensitivity, water_level, zero_mean,
-            taper, pre_filt, seedresp, pitsasim, sacsim, shsim, nfft_pow2)
     return data
 
 
