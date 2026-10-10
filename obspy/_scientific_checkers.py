@@ -126,6 +126,8 @@ def check_rotate_ne_rt(n, e, ba, r, t):
             if not run or not _finite(n, e, r, t, ba):
                 return
             n, e, r, t = _unmasked(n, e, r, t)
+            # rotate_ne_rt broadcasts n against e; compare in that shape
+            n, e = np.broadcast_arrays(n, e)
             scale = _scale(n, e, r, t)
             if scale > np.sqrt(np.finfo(float).max) / 8:
                 return
@@ -158,6 +160,7 @@ def check_rotate_zne_lqt(z, n, e, ba, inc, l, q, t):
             if not run:
                 return
             z, n, e, l, q, t = _unmasked(z, n, e, l, q, t)
+            z, n, e = np.broadcast_arrays(z, n, e)
             if not _finite(z, n, e, l, q, t, ba, inc):
                 return
             scale = _scale(z, n, e, l, q, t)
@@ -249,7 +252,32 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
             # station differences of unsigned counts wrap in the library
             if any(np.asarray(t).dtype.kind == "u" for t in (ts1, ts2, ts3)):
                 return
-            condition = float(np.linalg.cond(result["A"].T @ result["A"]))
+            used0 = np.asarray(subarray, dtype=int)
+            for t_ in (ts1, ts2, ts3):
+                t_ = np.asarray(t_)
+                if t_.dtype.kind == "i":
+                    t64 = t_[:, used0].astype(np.int64)
+                    dif = t64[:, 1:] - t64[:, :1]
+                    info = np.iinfo(t_.dtype)
+                    if dif.size and (dif.max() > info.max or
+                                     dif.min() < info.min):
+                        # station differences wrap in the input dtype
+                        return
+            # condition of the weighted normal matrix A^T Cd^-1 A that the
+            # library actually inverts (sigmau weighting included)
+            sig = np.asarray(sigmau, dtype=float)
+            if sig.ndim == 0:
+                var = np.full(3 * used0.size, float(sig) ** 2)
+            elif sig.ndim == 1:
+                var = (np.c_[sig, sig, sig] ** 2)[used0, :].reshape(-1)
+            else:
+                var = (sig[used0, :] ** 2).T.reshape(-1)
+            nd = used0.size - 1
+            dmat = np.r_[np.tile(-np.eye(3), (1, nd)), np.eye(3 * nd)].T
+            cd = dmat @ np.diag(var) @ dmat.T
+            amat = result["A"]
+            condition = float(np.linalg.cond(
+                amat.T @ np.linalg.inv(cd) @ amat))
             if not np.isfinite(condition) or condition > 1e7:
                 return
             from obspy.signal.array_analysis import array_rotation_strain
@@ -350,6 +378,11 @@ def check_farfield(mt, points, wave_type, displacement):
             lengths = np.linalg.norm(cart, axis=0)
             if np.any(lengths == 0) or not np.all(np.isfinite(lengths)):
                 return
+            # farfield normalises by sqrt(x*x+y*y+z*z); below tiny/eps the
+            # squared length loses precision (subnormal range)
+            sq = np.sum(np.asarray(cart, dtype=float) ** 2, axis=0)
+            if np.any(sq < np.finfo(float).tiny / _EPS):
+                return
             gamma = cart / lengths
             disp = np.asarray(displacement, dtype=float)
             tensor_scale = _scale(mt)
@@ -427,11 +460,15 @@ def check_flinn(stream, noise_thres, result):
             covariance = np.cov(np.vstack([arrays[2][mask], arrays[1][mask],
                                             arrays[0][mask]]))
             eigenvalues = np.linalg.eigvalsh(covariance)
-            eig_scale = max(1.0, float(np.max(np.abs(eigenvalues))))
+            eig_scale = float(np.max(np.abs(eigenvalues)))
             eig_gap = min(eigenvalues[2] - eigenvalues[1],
                           eigenvalues[1] - eigenvalues[0])
-            if eig_gap <= 1e-8 * eig_scale:
+            if eig_scale <= 0 or eig_gap <= 1e-8 * eig_scale:
                 return
+            # eigenvector (axis angle) error of a backward-stable solver is
+            # ~ eps * lambda_max / gap radians (Davis-Kahan)
+            ang_tol = 64 * np.degrees(_dtype_epsilon(*arrays) * eig_scale /
+                                      eig_gap)
             scaled = flinn([2 * value for value in arrays], 4 * noise_thres)
             bad = (_angle_difference_mod_180(result[0], scaled[0]) > 1e-8 or
                    np.any(np.abs(np.asarray(result[1:]) -
@@ -444,8 +481,11 @@ def check_flinn(stream, noise_thres, result):
             azimuth_defined = min(float(result[1]), float(rotated[1])) > 1e-3
             bad = ((azimuth_defined and
                     _angle_difference_mod_180(rotated[0], expected_azimuth) >
-                    1e-7) or np.any(np.abs(np.asarray(result[1:]) -
-                                        np.asarray(rotated[1:])) > 1e-9))
+                    max(1e-7, ang_tol)) or
+                   abs(float(result[1]) - float(rotated[1])) >
+                   max(1e-9, ang_tol) or
+                   np.any(np.abs(np.asarray(result[2:]) -
+                                 np.asarray(rotated[2:])) > 1e-9))
             trigger_if(bad, "OB-POL-002")
 
             negated = flinn([-value for value in arrays], noise_thres)
@@ -531,8 +571,12 @@ def _subnormal_energy(d64):
     """True when squared samples approach the float64 subnormal range."""
     if not d64.size:
         return False
-    peak = float(np.max(np.abs(d64)))
-    return 0 < peak * peak < np.finfo(float).tiny / _EPS
+    nonzero = np.abs(d64[d64 != 0])
+    if not nonzero.size:
+        return False
+    # the library squares raw samples: any nonzero sample whose energy is
+    # below tiny/eps is evaluated in (or flushed to) the subnormal range
+    return float(np.min(nonzero)) ** 2 < np.finfo(float).tiny / _EPS
 
 
 def check_classic_sta_lta(data, nsta, nlta, result):
@@ -544,14 +588,18 @@ def check_classic_sta_lta(data, nsta, nlta, result):
             d64 = np.asarray(data, dtype=float)
             if _subnormal_energy(d64):
                 return
-            other = classic_sta_lta_py(d64, nsta, nlta)
+            peak = float(np.max(np.abs(d64))) if d64.size else 0.0
+            # STA/LTA is scale invariant; normalise so the reference's
+            # running sums cannot overflow for large-but-finite data
+            other = classic_sta_lta_py(d64 / peak if peak > 0 else d64,
+                                       nsta, nlta)
             result = np.asarray(result)
             if result.shape != other.shape or not _finite(other):
                 trigger("OB-TRIG-001")
                 return
             # running-sum cancellation: the error at sample t is
             # ~ eps * cumulative energy(t) / energy of the STA window(t)
-            energy = d64 ** 2
+            energy = (d64 / peak if peak > 0 else d64) ** 2
             cumulative = np.cumsum(energy)
             window = np.convolve(energy, np.ones(int(nsta)))[:len(energy)]
             with np.errstate(all="ignore"):
@@ -770,6 +818,13 @@ def check_correlate(a, b, shift, normalize, method, result):
                 return
             scaled_norm = np.sqrt(np.sum((a / scale_a) ** 2) *
                                   np.sum((b / scale_b) ** 2))
+            in_max = min(float(np.finfo(a.dtype).max),
+                         float(np.finfo(b.dtype).max))
+            if (scale_a > np.sqrt(in_max / len(a)) or
+                    scale_b > np.sqrt(in_max / len(b)) or
+                    scale_a * scale_b > in_max / len(a)):
+                # sums of squares / products overflow in the input dtype
+                return
             if (not np.isfinite(scaled_norm) or
                     scale_a > np.sqrt(np.finfo(float).max / len(a)) or
                     scale_b > np.sqrt(np.finfo(float).max / len(b)) or
