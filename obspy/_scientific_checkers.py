@@ -111,17 +111,29 @@ def _different_at_scale(a, b, reference_scale, factor=256.0,
     return bool(np.any(np.abs(a - b) > tol))
 
 
+def _unmasked(*values):
+    """Plain arrays restricted to samples unmasked in every value."""
+    masks = [np.ma.getmaskarray(v) for v in values]
+    if not any(m.any() for m in masks):
+        return tuple(np.ma.getdata(v) for v in values)
+    keep = ~np.logical_or.reduce(masks)
+    return tuple(np.ma.getdata(v)[keep] for v in values)
+
+
 def check_rotate_ne_rt(n, e, ba, r, t):
     try:
         with _checking() as run:
             if not run or not _finite(n, e, r, t, ba):
                 return
+            n, e, r, t = _unmasked(n, e, r, t)
             scale = _scale(n, e, r, t)
             if scale > np.sqrt(np.finfo(float).max) / 8:
                 return
             for v in (n, e):
                 v = np.asarray(v)
-                # -iinfo.min is unrepresentable: not a valid rotation input
+                # unary minus wraps for unsigned ints and for iinfo.min
+                if v.dtype.kind == "u":
+                    return
                 if v.dtype.kind == "i" and v.size and \
                         np.any(v == np.iinfo(v.dtype).min):
                     return
@@ -143,7 +155,10 @@ def check_rotate_ne_rt(n, e, ba, r, t):
 def check_rotate_zne_lqt(z, n, e, ba, inc, l, q, t):
     try:
         with _checking() as run:
-            if not run or not _finite(z, n, e, l, q, t, ba, inc):
+            if not run:
+                return
+            z, n, e, l, q, t = _unmasked(z, n, e, l, q, t)
+            if not _finite(z, n, e, l, q, t, ba, inc):
                 return
             scale = _scale(z, n, e, l, q, t)
             if scale > np.sqrt(np.finfo(float).max) / 8:
@@ -169,7 +184,15 @@ def check_rotate_zne_lqt(z, n, e, ba, inc, l, q, t):
 def check_rotate2zne(data, orientations, inverse, result):
     try:
         with _checking() as run:
-            if not run or inverse or not _finite(*data, *result):
+            if not run or inverse:
+                return
+            n_data = len(data)
+            both = _unmasked(*data, *result)
+            data, result = both[:n_data], both[n_data:]
+            if not _finite(*data, *result):
+                return
+            if any(np.asarray(v).dtype.kind == "u" for v in data):
+                # unary minus / differences wrap for unsigned counts
                 return
             from obspy.signal.rotate import (_dip_azimuth2zne_base_vector,
                                              rotate2zne)
@@ -222,6 +245,9 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
                                       sigmau):
                 return
             if not (vp > vs > 0):
+                return
+            # station differences of unsigned counts wrap in the library
+            if any(np.asarray(t).dtype.kind == "u" for t in (ts1, ts2, ts3)):
                 return
             condition = float(np.linalg.cond(result["A"].T @ result["A"]))
             if not np.isfinite(condition) or condition > 1e7:
@@ -309,6 +335,10 @@ def check_farfield(mt, points, wave_type, displacement):
                 # farfield squares integer vectors in their own dtype
                 return
             epsilon = _dtype_epsilon(mt, points, displacement)
+            if points.dtype.kind in "iu":
+                # farfield's np.sqrt promotes int8->float16, int16->float32
+                promoted = np.sqrt(np.zeros(1, dtype=points.dtype)).dtype
+                epsilon = max(epsilon, float(np.finfo(promoted).eps))
             if points.shape[0] == 2:
                 cart = np.vstack((np.sin(points[0]) * np.cos(points[1]),
                                   np.sin(points[0]) * np.sin(points[1]),
@@ -379,6 +409,18 @@ def check_flinn(stream, noise_thres, result):
                 # integer wrap-around nor unrepresentable negation enters
                 arrays = [value.astype(np.float64) for value in arrays]
                 result = flinn(arrays, noise_thres)
+            # the library classifies samples by energy in the input dtype;
+            # skip when that classification is not determined at input
+            # precision (energy within rounding of the threshold, incl.
+            # subnormal float16/32 squares)
+            energy64 = sum(value.astype(np.float64) ** 2 for value in arrays)
+            in_eps = _dtype_epsilon(*arrays)
+            in_tiny = max(float(np.finfo(value.dtype).tiny)
+                          for value in arrays)
+            margin = 16 * in_eps * (np.maximum(energy64, abs(noise_thres)) +
+                                    in_tiny)
+            if np.any(np.abs(energy64 - noise_thres) <= margin):
+                return
             mask = sum(value ** 2 for value in arrays) > noise_thres
             if np.count_nonzero(mask) < 3:
                 return
