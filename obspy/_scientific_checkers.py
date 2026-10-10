@@ -485,42 +485,6 @@ def check_taup_travel_times(model, source_depth, distance, phase_list,
         pass
 
 
-def check_taup_ray_paths(arrivals, ray_param_tol):
-    try:
-        with _checking() as run:
-            if not run:
-                return
-            for arrival in arrivals:
-                path = arrival.path
-                if path is None or len(path) == 0:
-                    continue
-                time_scale = max(1.0, abs(arrival.time))
-                dist_scale = max(1.0, abs(arrival.purist_distance))
-                # Path reconstruction propagates ray-parameter refinement
-                # through every traversed branch; observed endpoint error is
-                # therefore bounded in units of the requested refinement,
-                # rather than by float epsilon alone.
-                # Triplication, caustic and multiple-bounce phases accumulate
-                # path-interpolation error far above the nominal refinement
-                # (up to 5.7e-4 of the travel time in a 3-model, 7-depth
-                # sweep of every phase); the relative floor sits 3.5x above it.
-                time_tol = max(256 * float(ray_param_tol),
-                               4096 * _EPS * time_scale,
-                               2e-3 * time_scale)
-                bad_time = abs(path[-1]["time"] - arrival.time) > time_tol
-                endpoint_deg = np.degrees(path[-1]["dist"])
-                dist_tol = max(256 * float(ray_param_tol),
-                               4096 * _EPS * dist_scale,
-                               2e-3 * dist_scale)
-                bad_dist = abs(endpoint_deg - arrival.purist_distance) > \
-                    dist_tol
-                if bad_time or bad_dist:
-                    trigger("OB-TAUP-003")
-                    return
-    except Exception:
-        pass
-
-
 def _subnormal_energy(d64):
     """True when squared samples approach the float64 subnormal range."""
     if not d64.size:

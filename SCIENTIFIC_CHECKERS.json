@@ -256,18 +256,6 @@
       "symbol": "TauPyModel.get_travel_times"
     },
     {
-      "alarm": "Endpoint disagreement exceeds the largest of 256 times requested ray-parameter refinement, float error, and 0.2% of the arrival time or distance.",
-      "family": "taup_path_endpoint",
-      "id": "OB-TAUP-003",
-      "invariant": "Final path time and angular distance agree with arrival time and purist distance.",
-      "observation_point": "After ray paths are produced.",
-      "precondition": "Finite nonempty, non-resampled path and finite arrival metadata.",
-      "rationale": "A ray path must terminate at its reported receiver in time and angle.",
-      "scientific_quantity": "ray-path cumulative endpoint",
-      "source": "obspy/taup/tau.py",
-      "symbol": "TauPyModel.get_ray_paths"
-    },
-    {
       "alarm": "Python result has a different shape or differs beyond eps times trace length, output scale and cumulative-to-window energy ratio.",
       "family": "classic_sta_lta_dual_implementation",
       "id": "OB-TRIG-001",

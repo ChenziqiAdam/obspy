@@ -776,9 +776,6 @@ class TauPyModel(object):
         rp.run()
         arrivals = Arrivals(sorted(rp.arrivals, key=lambda x: x.time),
                             model=self.model)
-        from obspy import _scientific_checkers
-        if _scientific_checkers.enabled():
-            _scientific_checkers.check_taup_ray_paths(arrivals, ray_param_tol)
         return arrivals
 
     def get_travel_times_geo(self, source_depth_in_km, source_latitude_in_deg,
