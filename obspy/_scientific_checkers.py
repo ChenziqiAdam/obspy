@@ -592,13 +592,18 @@ def check_eigval(datax, datay, dataz, fk, normf, result):
                 return
             from obspy.signal.polarization import eigval
             # float64 first: integer negation / doubling can wrap
-            dx, dy, dz = (np.asarray(v, dtype=np.float64)
+            # keep complex inputs complex: eigval takes Re(Hermitian cov),
+            # i.e. cov(Re)+cov(Im); a float64 cast would drop Im
+            work = np.result_type(np.float64, *(np.asarray(v) for v in
+                                                (datax, datay, dataz)))
+            dx, dy, dz = (np.asarray(v, dtype=work)
                           for v in (datax, datay, dataz))
             rotated = eigval(dy, -dx, dz, fk, normf)
             # eigenvalue outputs carry absolute error ~eps*largest eigenvalue
             lam_raw = max(float(np.max(np.abs(result[i]))) for i in range(3))
             if ((0 < lam_raw and _below_normal_energy(lam_raw)) or
-                    _squares_overflow((dx, dy, dz), np.size(dx))):
+                    _squares_overflow((np.abs(dx), np.abs(dy), np.abs(dz)),
+                                      np.size(dx))):
                 return
             # eigenvalues are cov / normf; the 2x law needs 4 * lambda finite
             if not _window_ok(result[:3], power=1, count=1, amp=4.0 * 2.0):
@@ -712,7 +717,10 @@ def check_classic_sta_lta(data, nsta, nlta, result):
 def check_recursive_sta_lta(data, nsta, nlta, result):
     try:
         with _checking() as run:
-            if not run or not _finite(data, result) or not (nlta > nsta > 0):
+            # "sufficient samples": with len <= nlta every sample is LTA
+            # warm-up (C masks only when nlta < ndat, Python always)
+            if (not run or not _finite(data, result) or
+                    not (nlta > nsta > 0) or np.size(data) <= nlta):
                 return
             from obspy.signal.trigger import recursive_sta_lta_py
             d64 = np.asarray(data, dtype=float)
