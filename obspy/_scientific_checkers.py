@@ -87,6 +87,21 @@ def _dtype_epsilon(*values):
     return epsilon
 
 
+def _squares_overflow(values, count=1):
+    """True when summing ``count`` squares of ``values`` nears float64 max."""
+    peak = 0.0
+    for value in values:
+        value = np.asarray(value, dtype=np.float64)
+        if value.size:
+            peak = max(peak, float(np.max(np.abs(value))))
+    return peak * peak * max(1, int(count)) * 8.0 > np.finfo(float).max
+
+
+def _below_normal_energy(scale):
+    """True when a quadratic (covariance-like) scale is subnormal."""
+    return float(scale) < np.finfo(float).tiny / _EPS
+
+
 def _different(a, b, factor=256.0, condition=1.0, epsilon=None):
     a = np.asarray(a)
     b = np.asarray(b)
@@ -233,11 +248,15 @@ _ARRAY_KEYS = ("ts_d", "ts_dh", "ts_s", "ts_sh", "ts_wmag", "ts_w1",
 
 
 def _array_result_differs(first, second, condition, extra=1.0, epsilon=None):
+    # outputs the library cannot represent (ts_wmag / ts_tilt = sqrt(sum
+    # w**2) beyond ~1e154) carry no invariance claim
+    keys = [key for key in _ARRAY_KEYS
+            if np.all(np.isfinite(np.asarray(first[key])))]
     return any(_different(first[key], second[key], 2048 * extra, condition)
                if epsilon is None else
                _different(first[key], second[key], 2048 * extra, condition,
                           epsilon=epsilon)
-               for key in _ARRAY_KEYS)
+               for key in keys)
 
 
 def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
@@ -465,6 +484,11 @@ def check_flinn(stream, noise_thres, result):
                           eigenvalues[1] - eigenvalues[0])
             if eig_scale <= 0 or eig_gap <= 1e-8 * eig_scale:
                 return
+            # covariance in the subnormal range loses relative precision, and
+            # summed squares near float64 max overflow: no law holds there
+            if (_below_normal_energy(eig_scale) or
+                    _squares_overflow(arrays, arrays[0].size)):
+                return
             # eigenvector (axis angle) error of a backward-stable solver is
             # ~ eps * lambda_max / gap radians (Davis-Kahan)
             ang_tol = 64 * np.degrees(_dtype_epsilon(*arrays) * eig_scale /
@@ -509,6 +533,10 @@ def check_eigval(datax, datay, dataz, fk, normf, result):
                           for v in (datax, datay, dataz))
             rotated = eigval(dy, -dx, dz, fk, normf)
             # eigenvalue outputs carry absolute error ~eps*largest eigenvalue
+            lam_raw = max(float(np.max(np.abs(result[i]))) for i in range(3))
+            if ((0 < lam_raw and _below_normal_energy(lam_raw)) or
+                    _squares_overflow((dx, dy, dz), np.size(dx))):
+                return
             lam = max(1.0, _scale(result[0], result[1], result[2]))
             eig_idx = (0, 1, 2, 5)
             # outputs 5-7 are FIR time derivatives with gain sum|fk|
@@ -587,6 +615,9 @@ def check_classic_sta_lta(data, nsta, nlta, result):
             from obspy.signal.trigger import classic_sta_lta_py
             d64 = np.asarray(data, dtype=float)
             if _subnormal_energy(d64):
+                return
+            # the library accumulates squared samples in float64
+            if _squares_overflow((d64,), int(nlta)):
                 return
             peak = float(np.max(np.abs(d64))) if d64.size else 0.0
             # STA/LTA is scale invariant; normalise so the reference's
@@ -726,10 +757,20 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
                 shifted = gps2dist_azimuth(float(lat1), float(lon1) + 360.0,
                                            float(lat2), float(lon2) + 360.0,
                                            a=a, f=f)
-                bad_shift = (abs(result[0] - shifted[0]) > distance_tol or
-                             _circular_difference(result[1], shifted[1]) >
+                # compare float64 against float64: geographiclib keeps the
+                # numpy-scalar dtype of float32/float16 inputs internally
+                if all(np.asarray(v).dtype == np.float64 or
+                       isinstance(v, (int, float))
+                       for v in (lat1, lon1, lat2, lon2)):
+                    base = result
+                else:
+                    base = gps2dist_azimuth(float(lat1), float(lon1),
+                                            float(lat2), float(lon2),
+                                            a=a, f=f)
+                bad_shift = (abs(base[0] - shifted[0]) > distance_tol or
+                             _circular_difference(base[1], shifted[1]) >
                              angle_tol or
-                             _circular_difference(result[2], shifted[2]) >
+                             _circular_difference(base[2], shifted[2]) >
                              angle_tol)
                 trigger_if(bad_shift, "OB-GEO-003")
 
