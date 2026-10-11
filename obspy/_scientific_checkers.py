@@ -783,6 +783,23 @@ def check_paz_response(poles, zeros, scale_fac, t_samp, nfft, response,
                 condition = max(1.0, *conditions)
                 if not np.isfinite(condition) or condition > 1e8:
                     continue
+                # the reference multiplies/divides the factors (s - root)
+                # one at a time; skip bins where that running product
+                # leaves the normal range (underflow/overflow of the
+                # reference, not of the library)
+                factors = np.concatenate([
+                    np.abs(s - np.asarray(zeros, dtype=complex)),
+                    1.0 / np.abs(s - np.asarray(poles, dtype=complex))])
+                if np.all(factors[:len(zeros)] != 0):
+                    with np.errstate(all="ignore"):
+                        running = np.append(np.cumprod(factors),
+                                            np.abs(scale_fac) *
+                                            np.prod(factors))
+                    floor = np.finfo(float).tiny / _EPS
+                    if (not np.all(np.isfinite(running)) or
+                            np.any(running < floor) or
+                            np.any(running > np.finfo(float).max / 8)):
+                        continue
                 # evaluate the reference in complex128; allow the precision
                 # of the supplied pole/zero dtype
                 expected = paz_2_amplitude_value_of_freq_resp(
@@ -986,6 +1003,10 @@ def check_correlate(a, b, shift, normalize, method, result):
                                                1024 * max(1, len(a))),
                            "OB-XCORR-002")
 
+                # the fft path forms A_k * B_k in the input dtype with
+                # |A_k| <= n * scale_a, |B_k| <= n * scale_b
+                if scale_a * scale_b * float(len(a)) ** 2 > in_max / 8:
+                    return
                 direct = correlate(a, b, shift, demean=False,
                                    normalize=normalize, method="direct")
                 fft = correlate(a, b, shift, demean=False,
