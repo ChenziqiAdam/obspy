@@ -87,19 +87,64 @@ def _dtype_epsilon(*values):
     return epsilon
 
 
+def _coarse_finfo(*values):
+    """finfo of the coarsest (largest-eps) floating dtype among ``values``."""
+    info = np.finfo(np.float64)
+    for value in values:
+        dtype = np.asarray(value).dtype
+        if dtype.kind in "fc":
+            candidate = np.finfo(dtype)
+            if candidate.eps > info.eps:
+                info = candidate
+    return info
+
+
+def _peak(values):
+    peak = np.float64(0.0)
+    for value in values:
+        value = np.asarray(value)
+        if value.size:
+            peak = max(peak, np.float64(np.max(np.abs(value.astype(
+                np.complex128 if value.dtype.kind == "c" else np.float64)))))
+    return peak
+
+
+def _window_ok(values, power=1, count=1, amp=1.0, lower=False):
+    """Normal-number window shared by all checkers.
+
+    True when the quantity a check derives from ``values`` -- ``count``
+    terms of ``(amp * |v|) ** power`` (squares, doubled inputs, products,
+    condition-amplified re-calls) -- stays inside the normal range of the
+    coarsest floating dtype among the inputs.  With ``lower`` the derived
+    magnitude must also exceed ``tiny / eps`` of that dtype (no subnormal
+    loss of relative precision).
+    """
+    info = _coarse_finfo(*values)
+    peak = _peak(values)
+    if not np.isfinite(peak):
+        return False
+    if peak == 0:
+        return True
+    with np.errstate(all="ignore"):
+        derived = (np.float64(amp) * peak) ** power
+        if not derived * max(1, int(count)) * 8.0 <= float(info.max):
+            return False
+        if lower and not peak ** power >= float(info.tiny) / float(info.eps):
+            return False
+    return True
+
+
 def _squares_overflow(values, count=1):
     """True when summing ``count`` squares of ``values`` nears float64 max."""
-    peak = 0.0
-    for value in values:
-        value = np.asarray(value, dtype=np.float64)
-        if value.size:
-            peak = max(peak, float(np.max(np.abs(value))))
-    return peak * peak * max(1, int(count)) * 8.0 > np.finfo(float).max
+    values = [np.asarray(v, dtype=np.float64) for v in values]
+    return not _window_ok(values, power=2, count=count)
 
 
-def _below_normal_energy(scale):
-    """True when a quadratic (covariance-like) scale is subnormal."""
-    return float(scale) < np.finfo(float).tiny / _EPS
+def _below_normal_energy(scale, *like):
+    """True when a quadratic (covariance-like) scale is subnormal in the
+    coarsest dtype among ``like`` (float64 by default)."""
+    info = _coarse_finfo(*like)
+    return float(scale) < float(info.tiny) / float(info.eps)
 
 
 def _different(a, b, factor=256.0, condition=1.0, epsilon=None):
@@ -144,7 +189,7 @@ def check_rotate_ne_rt(n, e, ba, r, t):
             # rotate_ne_rt broadcasts n against e; compare in that shape
             n, e = np.broadcast_arrays(n, e)
             scale = _scale(n, e, r, t)
-            if scale > np.sqrt(np.finfo(float).max) / 8:
+            if not _window_ok((n, e, r, t), power=2, count=2):
                 return
             for v in (n, e):
                 v = np.asarray(v)
@@ -179,7 +224,7 @@ def check_rotate_zne_lqt(z, n, e, ba, inc, l, q, t):
             if not _finite(z, n, e, l, q, t, ba, inc):
                 return
             scale = _scale(z, n, e, l, q, t)
-            if scale > np.sqrt(np.finfo(float).max) / 8:
+            if not _window_ok((z, n, e, l, q, t), power=2, count=3):
                 return
             from obspy.signal.rotate import rotate_lqt_zne
             z2, n2, e2 = rotate_lqt_zne(l, q, t, ba, inc)
@@ -220,6 +265,11 @@ def check_rotate2zne(data, orientations, inverse, result):
             ])
             condition = float(np.linalg.cond(matrix))
             if not np.isfinite(condition) or condition > 1e8:
+                return
+            # the inverse / permuted re-calls sum 3 terms, each amplified by
+            # up to ~condition
+            if not _window_ok((*data, *result), power=1, count=3,
+                              amp=condition):
                 return
             args = []
             for component, (azimuth, dip) in zip(result, orientations):
@@ -267,6 +317,10 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
                                       sigmau):
                 return
             if not (vp > vs > 0):
+                return
+            # station differences / normal-matrix sums stay representable
+            if not _window_ok((ts1, ts2, ts3, array_coords), power=1,
+                              count=8):
                 return
             # station differences of unsigned counts wrap in the library
             if any(np.asarray(t).dtype.kind == "u" for t in (ts1, ts2, ts3)):
@@ -400,7 +454,13 @@ def check_farfield(mt, points, wave_type, displacement):
             # farfield normalises by sqrt(x*x+y*y+z*z); below tiny/eps the
             # squared length loses precision (subnormal range)
             sq = np.sum(np.asarray(cart, dtype=float) ** 2, axis=0)
-            if np.any(sq < np.finfo(float).tiny / _EPS):
+            # farfield squares in the (promoted) input dtype: use its range
+            sq_info = _coarse_finfo(cart)
+            if np.any(sq < max(np.finfo(float).tiny / _EPS,
+                               float(sq_info.tiny) / float(sq_info.eps))):
+                return
+            if (not _window_ok((cart,), power=2, count=3) or
+                    not _window_ok((mt, displacement), power=1, count=9)):
                 return
             gamma = cart / lengths
             disp = np.asarray(displacement, dtype=float)
@@ -486,8 +546,11 @@ def check_flinn(stream, noise_thres, result):
                 return
             # covariance in the subnormal range loses relative precision, and
             # summed squares near float64 max overflow: no law holds there
-            if (_below_normal_energy(eig_scale) or
+            if (_below_normal_energy(eig_scale, *arrays) or
                     _squares_overflow(arrays, arrays[0].size)):
+                return
+            # the scale law squares 2*x (3 components) in the input dtype
+            if not _window_ok(arrays, power=2, count=3, amp=2.0):
                 return
             # eigenvector (axis angle) error of a backward-stable solver is
             # ~ eps * lambda_max / gap radians (Davis-Kahan)
@@ -536,6 +599,9 @@ def check_eigval(datax, datay, dataz, fk, normf, result):
             lam_raw = max(float(np.max(np.abs(result[i]))) for i in range(3))
             if ((0 < lam_raw and _below_normal_energy(lam_raw)) or
                     _squares_overflow((dx, dy, dz), np.size(dx))):
+                return
+            # eigenvalues are cov / normf; the 2x law needs 4 * lambda finite
+            if not _window_ok(result[:3], power=1, count=1, amp=4.0 * 2.0):
                 return
             lam = max(1.0, _scale(result[0], result[1], result[2]))
             eig_idx = (0, 1, 2, 5)
@@ -653,11 +719,25 @@ def check_recursive_sta_lta(data, nsta, nlta, result):
             # STA/LTA is scale invariant; normalise so the reference's
             # tiny-initialised LTA is not biased for physically tiny units
             peak = float(np.max(np.abs(d64))) if d64.size else 0.0
-            if _subnormal_energy(d64):
+            if _subnormal_energy(d64) or _squares_overflow((d64,), 1):
                 return
             other = recursive_sta_lta_py(d64 / peak if peak > 0 else d64,
                                          nsta, nlta)
-            trigger_if(_different(result, other, 64 * max(nlta, len(data))),
+            # the library runs the recursion on raw squares: samples where
+            # its decayed STA / LTA state is subnormal carry no precision
+            from scipy.signal import lfilter
+            sq = d64 ** 2
+            sta = lfilter([1.0 / nsta], [1.0, -(1.0 - 1.0 / nsta)], sq)
+            lta = lfilter([1.0 / nlta], [1.0, -(1.0 - 1.0 / nlta)], sq)
+            floor = np.finfo(float).tiny / _EPS
+            keep = (((sta == 0) | (sta >= floor)) &
+                    ((lta == 0) | (lta >= floor)))
+            res = np.asarray(result)
+            if res.shape != other.shape:
+                trigger("OB-TRIG-002")
+                return
+            trigger_if(_different(res[keep], other[keep],
+                                  64 * max(nlta, len(data))),
                        "OB-TRIG-002")
     except Exception:
         pass
@@ -687,6 +767,16 @@ def check_paz_response(poles, zeros, scale_fac, t_samp, nfft, response,
                     coefficients = np.poly(roots)
                     value = np.polyval(coefficients, s)
                     upper = np.polyval(np.abs(coefficients), abs(s))
+                    nonzero = np.abs(coefficients[coefficients != 0])
+                    floor = np.finfo(float).tiny / _EPS
+                    if ((nonzero.size and (float(np.min(nonzero)) < floor or
+                                           float(np.max(nonzero)) >
+                                           np.finfo(float).max / 8)) or
+                            (0 < abs(upper) < floor) or
+                            abs(upper) > np.finfo(float).max / 8):
+                        # coefficients / terms outside the normal range
+                        conditions.append(np.inf)
+                        continue
                     condition = abs(upper) / max(abs(value),
                                                  np.finfo(float).tiny)
                     conditions.append(float(condition))
@@ -724,6 +814,8 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
             if not (-90 <= lat1 <= 90 and -90 <= lat2 <= 90 and
                     a > 0 and 0 <= f < 1 and result[0] > 0):
                 return
+            if not _window_ok((a, result[0]), power=2):
+                return
             from obspy.geodetics.base import (gps2dist_azimuth,
                                                locations2degrees)
             reverse = gps2dist_azimuth(lat2, lon2, lat1, lon1, a=a, f=f)
@@ -751,6 +843,11 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
                     _circular_difference(result[2], reverse[1]) > angle_tol)
                 trigger_if(bad_bearings, "OB-GEO-002")
 
+            # lon + 360 re-rounds each longitude by up to half an ulp at
+            # |lon| + 360; that input perturbation moves the distance by up
+            # to a * (2 ulp in radians)
+            shift_tol = distance_tol + 2.0 * float(a) * np.deg2rad(
+                np.spacing(max(abs(float(lon1)), abs(float(lon2))) + 360.0))
             if (bearing_condition <= 1e8 and
                     max(abs(lon1), abs(lon2)) <= 1e6):
                 # shift the stored values in float64 (no dtype re-rounding)
@@ -767,7 +864,7 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
                     base = gps2dist_azimuth(float(lat1), float(lon1),
                                             float(lat2), float(lon2),
                                             a=a, f=f)
-                bad_shift = (abs(base[0] - shifted[0]) > distance_tol or
+                bad_shift = (abs(base[0] - shifted[0]) > shift_tol or
                              _circular_difference(base[1], shifted[1]) >
                              angle_tol or
                              _circular_difference(base[2], shifted[2]) >
