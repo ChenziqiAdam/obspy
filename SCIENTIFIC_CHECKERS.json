@@ -57,7 +57,7 @@
       "id": "OB-ROT-005",
       "invariant": "Sensor components to ZNE and back to the same sensor basis recovers all records.",
       "observation_point": "After forward rotate2zne returns.",
-      "precondition": "Finite equal-length channels and a nonsingular orientation matrix with condition number <=1e8. The inverse and permuted re-evaluations (three terms, each amplified by up to the condition number) must be representable in the coarsest input dtype.",
+      "precondition": "Three finite equal-length 1-D traces and a nonsingular orientation matrix with condition number <=1e8. The inverse and permuted re-evaluations (three terms, each amplified by up to the condition number) must be representable in the coarsest input dtype.",
       "rationale": "SEED orientation metadata must define a reversible physical basis.",
       "scientific_quantity": "arbitrarily oriented three-component sensor motion",
       "source": "obspy/signal/rotate.py",
@@ -88,7 +88,7 @@
       "symbol": "array_rotation_strain"
     },
     {
-      "alarm": "Translated-call outputs exceed coordinate-dtype cancellation (scaled by sub-array offset-to-aperture ratio) and least-squares error.",
+      "alarm": "Translated-call outputs exceed coordinate-dtype cancellation (scaled by sub-array offset-to-aperture ratio) and least-squares error, scaled by the magnitude of the whole solution.",
       "family": "array_rotation_strain_spatial_origin",
       "id": "OB-ARR-002",
       "invariant": "A common translation of all station coordinates leaves strain and rotation unchanged.",
@@ -100,7 +100,7 @@
       "symbol": "array_rotation_strain"
     },
     {
-      "alarm": "Common-mode transformed outputs exceed differencing and solve error, including the re-rounding of the added motion relative to the inter-station signal.",
+      "alarm": "Common-mode transformed outputs exceed differencing and solve error scaled by the magnitude of the whole solution, including the re-rounding of the added motion relative to the inter-station signal.",
       "family": "array_rotation_strain_common_mode",
       "id": "OB-ARR-003",
       "invariant": "Adding identical three-component motion at every station leaves strain and rotation unchanged.",
@@ -237,7 +237,7 @@
       "id": "OB-TAUP-001",
       "invariant": "Travel-time and ray-path APIs return the same branches, times, and ray parameters.",
       "observation_point": "After travel-time arrivals are produced.",
-      "precondition": "Valid model depths, distance, explicit phase list, and finite returned branches.",
+      "precondition": "Valid model depths, distance, explicit phase list (a list or tuple, not a one-shot iterator), and finite returned branches.",
       "rationale": "Path and scalar products represent the same seismic rays.",
       "scientific_quantity": "seismic arrival branch time and ray parameter",
       "source": "obspy/taup/tau.py",
@@ -352,12 +352,12 @@
       "symbol": "locations2degrees"
     },
     {
-      "alarm": "Metric and converted angular distances (reference evaluated in float64) exceed combined model rounding error.",
+      "alarm": "Metric and converted angular distances (reference evaluated in float64) exceed combined model rounding error, including the dependency's snapping of angles below 1/16 degree to the input-dtype grid.",
       "family": "geodesic_spherical_model_limit",
       "id": "OB-GEO-006",
       "invariant": "A zero-flattening ellipsoid agrees with spherical angular distance using the same radius.",
       "observation_point": "After inverse-geodesic computation.",
-      "precondition": "Solved finite non-antipodal points and a positive finite sphere radius.",
+      "precondition": "Solved finite non-antipodal points, a positive finite sphere radius, and float32 or float64 coordinates.",
       "rationale": "A zero-flattening ellipsoid is physically the same sphere.",
       "scientific_quantity": "zero-flattening geodesic distance",
       "source": "obspy/geodetics/base.py",

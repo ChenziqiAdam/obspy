@@ -249,6 +249,10 @@ def check_rotate2zne(data, orientations, inverse, result):
         with _checking() as run:
             if not run or inverse:
                 return
+            # documented input: three 1-D traces (2-D input is contracted
+            # over the wrong axis by np.dot and the output is raveled)
+            if any(np.ndim(v) != 1 for v in data):
+                return
             n_data = len(data)
             both = _unmasked(*data, *result)
             data, result = both[:n_data], both[n_data:]
@@ -302,10 +306,13 @@ def _array_result_differs(first, second, condition, extra=1.0, epsilon=None):
     # w**2) beyond ~1e154) carry no invariance claim
     keys = [key for key in _ARRAY_KEYS
             if np.all(np.isfinite(np.asarray(first[key])))]
-    return any(_different(first[key], second[key], 2048 * extra, condition)
-               if epsilon is None else
-               _different(first[key], second[key], 2048 * extra, condition,
-                          epsilon=epsilon)
+    # all outputs are rows of one least-squares solution: roundoff in a
+    # (near-)zero component scales with the whole solution vector, not with
+    # that component (units of the displacement are arbitrary)
+    solution_scale = _scale(*(first[key] for key in keys),
+                            *(second[key] for key in keys))
+    return any(_different_at_scale(first[key], second[key], solution_scale,
+                                   2048 * extra, condition, epsilon=epsilon)
                for key in keys)
 
 
@@ -654,6 +661,10 @@ def check_taup_travel_times(model, source_depth, distance, phase_list,
         with _checking() as run:
             if not run or distance is None or not arrivals:
                 return
+            # a one-shot iterator was consumed by the library call; it
+            # cannot be replayed for the cross-product re-calls
+            if phase_list is not None and iter(phase_list) is phase_list:
+                return
             rays = model.get_ray_paths(source_depth, distance, phase_list,
                                        receiver_depth, ray_param_tol)
             trigger_if(_arrivals_differ(arrivals, rays, ray_param_tol),
@@ -903,6 +914,12 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
             expected = np.deg2rad(angular) * a
             sphere_tol = 8192 * _EPS * max(1.0, float(a),
                                            abs(float(expected)))
+            # geographiclib keeps numpy-scalar dtypes: AngRound snaps
+            # |angle| < 1/16 deg to the 1/16-grid of the input dtype
+            # (spacing eps/16 deg) for lat1, lat2 and lon12
+            in_eps = _dtype_epsilon(lat1, lon1, lat2, lon2)
+            if in_eps > _EPS:
+                sphere_tol += 3 * float(a) * np.deg2rad(in_eps / 16.0)
             trigger_if(abs(spherical[0] - expected) > sphere_tol,
                        "OB-GEO-006")
     except Exception:
