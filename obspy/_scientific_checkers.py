@@ -519,6 +519,9 @@ def check_flinn(stream, noise_thres, result):
         with _checking() as run:
             if not run or not _finite(*stream, noise_thres, result):
                 return
+            # the threshold is a variance (physical scalar): an integer
+            # dtype would wrap in 4 * noise_thres (int8(100) * 4 == -112)
+            noise_thres = float(noise_thres)
             arrays = [np.asarray(value) for value in stream]
             if min(value.size for value in arrays) < 3:
                 return
@@ -613,12 +616,17 @@ def check_eigval(datax, datay, dataz, fk, normf, result):
                                       np.size(dx))):
                 return
             # eigenvalues are cov / normf; the 2x law needs 4 * lambda finite
-            if not _window_ok(result[:3], power=1, count=1, amp=4.0 * 2.0):
+            # outputs 5-7 are FIR time derivatives with gain sum|fk|;
+            # sum in float64 (int64 |fk| sums wrap: 2 * 2**62 -> -2**63)
+            gain = max(1.0, float(np.sum(np.abs(np.asarray(fk,
+                                                           dtype=np.float64)))))
+            # the 2x law needs 4 * lambda, and the FIR products
+            # fk_i * 4 * lambda of the derivative, to stay finite
+            if not _window_ok(result[:3], power=1, count=1,
+                              amp=4.0 * 2.0 * gain):
                 return
             lam = max(1.0, _scale(result[0], result[1], result[2]))
             eig_idx = (0, 1, 2, 5)
-            # outputs 5-7 are FIR time derivatives with gain sum|fk|
-            gain = max(1.0, float(np.sum(np.abs(fk))))
             trigger_if(any(
                 _different_at_scale(a, b, lam * (gain if i == 5 else 1.0),
                                     4096) if i in eig_idx
@@ -751,6 +759,15 @@ def check_recursive_sta_lta(data, nsta, nlta, result):
             floor = np.finfo(float).tiny / _EPS
             keep = (((sta == 0) | (sta >= floor)) &
                     ((lta == 0) | (lta >= floor)))
+            # the reference recursion runs on peak-normalised squares; for
+            # extreme dynamic range those underflow although the raw ones
+            # do not -- mask samples where the reference state is subnormal
+            sqn = (d64 / peak if peak > 0 else d64) ** 2
+            sta_n = lfilter([1.0 / nsta], [1.0, -(1.0 - 1.0 / nsta)], sqn)
+            lta_n = lfilter([1.0 / nlta], [1.0, -(1.0 - 1.0 / nlta)], sqn)
+            keep &= (((sta_n == 0) == (sta == 0)) & ((lta_n == 0) == (lta == 0))
+                     & ((sta_n == 0) | (sta_n >= floor))
+                     & ((lta_n == 0) | (lta_n >= floor)))
             res = np.asarray(result)
             if res.shape != other.shape:
                 trigger("OB-TRIG-002")
@@ -842,6 +859,34 @@ def _circular_difference(a, b):
     return np.abs((np.asarray(a) - np.asarray(b) + 180.0) % 360.0 - 180.0)
 
 
+def _geodesic_reaches(geod, lat1, lon1, lat2, lon2, azi, dist, baz,
+                      distance_tol, angle_tol):
+    end = geod.Direct(float(lat1), float(lon1), float(azi), float(dist))
+    miss = geod.Inverse(end["lat2"], end["lon2"], float(lat2),
+                        float(lon2))["s12"]
+    arrival = (end["azi2"] + 180.0) % 360.0
+    return (miss <= distance_tol and
+            float(_circular_difference(arrival, baz)) <= angle_tol)
+
+
+def _both_geodesics_valid(lat1, lon1, lat2, lon2, a, f, result, reverse,
+                          distance_tol, angle_tol):
+    """Endpoints on the cut locus (e.g. lat2 == -lat1, near antipodal on
+    an oblate ellipsoid) have two equal shortest geodesics; az12 != baz21
+    is then legitimate iff each returned solution is itself a geodesic of
+    the common length joining the endpoints (Karney 2013, sec. 3)."""
+    try:
+        from geographiclib.geodesic import Geodesic
+    except ImportError:
+        return False
+    geod = Geodesic(float(a), float(f))
+    return (_geodesic_reaches(geod, lat1, lon1, lat2, lon2, result[1],
+                              result[0], result[2], distance_tol, angle_tol)
+            and _geodesic_reaches(geod, lat2, lon2, lat1, lon1, reverse[1],
+                                  reverse[0], reverse[2], distance_tol,
+                                  angle_tol))
+
+
 def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
     try:
         with _checking() as run:
@@ -877,6 +922,10 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
                 bad_bearings = (
                     _circular_difference(result[1], reverse[2]) > angle_tol or
                     _circular_difference(result[2], reverse[1]) > angle_tol)
+                if bad_bearings:
+                    bad_bearings = not _both_geodesics_valid(
+                        lat1, lon1, lat2, lon2, a, f, result, reverse,
+                        distance_tol, angle_tol)
                 trigger_if(bad_bearings, "OB-GEO-002")
 
             # lon + 360 re-rounds each longitude by up to half an ulp at
