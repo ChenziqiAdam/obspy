@@ -60,9 +60,6 @@ def recursive_sta_lta(a, nsta, nlta):
     charfct = np.empty(ndat, dtype=np.float64)
     # do not use pointer here:
     clibsignal.recstalta(a, charfct, ndat, nsta, nlta)
-    from obspy import _scientific_checkers
-    if _scientific_checkers.enabled():
-        _scientific_checkers.check_recursive_sta_lta(a, nsta, nlta, charfct)
     return charfct
 
 

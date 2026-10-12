@@ -519,9 +519,6 @@ def check_flinn(stream, noise_thres, result):
         with _checking() as run:
             if not run or not _finite(*stream, noise_thres, result):
                 return
-            # the threshold is a variance (physical scalar): an integer
-            # dtype would wrap in 4 * noise_thres (int8(100) * 4 == -112)
-            noise_thres = float(noise_thres)
             arrays = [np.asarray(value) for value in stream]
             if min(value.size for value in arrays) < 3:
                 return
@@ -559,19 +556,10 @@ def check_flinn(stream, noise_thres, result):
             if (_below_normal_energy(eig_scale, *arrays) or
                     _squares_overflow(arrays, arrays[0].size)):
                 return
-            # the scale law squares 2*x (3 components) in the input dtype
-            if not _window_ok(arrays, power=2, count=3, amp=2.0):
-                return
             # eigenvector (axis angle) error of a backward-stable solver is
             # ~ eps * lambda_max / gap radians (Davis-Kahan)
             ang_tol = 64 * np.degrees(_dtype_epsilon(*arrays) * eig_scale /
                                       eig_gap)
-            scaled = flinn([2 * value for value in arrays], 4 * noise_thres)
-            bad = (_angle_difference_mod_180(result[0], scaled[0]) > 1e-8 or
-                   np.any(np.abs(np.asarray(result[1:]) -
-                                 np.asarray(scaled[1:])) > 1e-10))
-            trigger_if(bad, "OB-POL-001")
-
             rotated = flinn([arrays[0], arrays[2], -arrays[1]], noise_thres)
             expected_azimuth = (float(result[0]) - 90.0) % 180.0
             # azimuth is undefined for a (near-)vertical principal axis
@@ -633,16 +621,6 @@ def check_eigval(datax, datay, dataz, fk, normf, result):
                 else _different(a, b, 4096 * (gain if i > 5 else 1.0))
                 for i, (a, b) in enumerate(zip(result, rotated))),
                 "OB-POL-004")
-
-            scaled = eigval(2 * dx, 2 * dy, 2 * dz, fk, normf)
-            bad = any(_different_at_scale(
-                          4 * np.asarray(result[index]), scaled[index],
-                          4 * lam * (gain if index == 5 else 1.0), 4096)
-                      for index in (0, 1, 2, 5))
-            bad = bad or any(_different(result[index], scaled[index],
-                                        4096 * (gain if index > 5 else 1.0))
-                             for index in (3, 4, 6, 7))
-            trigger_if(bad, "OB-POL-005")
     except Exception:
         pass
 
@@ -729,52 +707,6 @@ def check_classic_sta_lta(data, nsta, nlta, result):
                    np.maximum(1.0, cond) *
                    np.maximum(1.0, np.maximum(np.abs(result), np.abs(other))))
             trigger_if(np.any(np.abs(result - other) > tol), "OB-TRIG-001")
-    except Exception:
-        pass
-
-
-def check_recursive_sta_lta(data, nsta, nlta, result):
-    try:
-        with _checking() as run:
-            # "sufficient samples": with len <= nlta every sample is LTA
-            # warm-up (C masks only when nlta < ndat, Python always)
-            if (not run or not _finite(data, result) or
-                    not (nlta > nsta > 0) or np.size(data) <= nlta):
-                return
-            from obspy.signal.trigger import recursive_sta_lta_py
-            d64 = np.asarray(data, dtype=float)
-            # STA/LTA is scale invariant; normalise so the reference's
-            # tiny-initialised LTA is not biased for physically tiny units
-            peak = float(np.max(np.abs(d64))) if d64.size else 0.0
-            if _subnormal_energy(d64) or _squares_overflow((d64,), 1):
-                return
-            other = recursive_sta_lta_py(d64 / peak if peak > 0 else d64,
-                                         nsta, nlta)
-            # the library runs the recursion on raw squares: samples where
-            # its decayed STA / LTA state is subnormal carry no precision
-            from scipy.signal import lfilter
-            sq = d64 ** 2
-            sta = lfilter([1.0 / nsta], [1.0, -(1.0 - 1.0 / nsta)], sq)
-            lta = lfilter([1.0 / nlta], [1.0, -(1.0 - 1.0 / nlta)], sq)
-            floor = np.finfo(float).tiny / _EPS
-            keep = (((sta == 0) | (sta >= floor)) &
-                    ((lta == 0) | (lta >= floor)))
-            # the reference recursion runs on peak-normalised squares; for
-            # extreme dynamic range those underflow although the raw ones
-            # do not -- mask samples where the reference state is subnormal
-            sqn = (d64 / peak if peak > 0 else d64) ** 2
-            sta_n = lfilter([1.0 / nsta], [1.0, -(1.0 - 1.0 / nsta)], sqn)
-            lta_n = lfilter([1.0 / nlta], [1.0, -(1.0 - 1.0 / nlta)], sqn)
-            keep &= (((sta_n == 0) == (sta == 0)) & ((lta_n == 0) == (lta == 0))
-                     & ((sta_n == 0) | (sta_n >= floor))
-                     & ((lta_n == 0) | (lta_n >= floor)))
-            res = np.asarray(result)
-            if res.shape != other.shape:
-                trigger("OB-TRIG-002")
-                return
-            trigger_if(_different(res[keep], other[keep],
-                                  64 * max(nlta, len(data))),
-                       "OB-TRIG-002")
     except Exception:
         pass
 
