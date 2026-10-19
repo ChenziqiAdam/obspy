@@ -87,6 +87,24 @@ def _dtype_epsilon(*values):
     return epsilon
 
 
+def _narrow_dtype_epsilon(*values, terms=1):
+    """Shared narrow-dtype policy: working epsilon of ``values``, or None.
+
+    None when a fixed-width integer input could wrap in the library's own
+    arithmetic: ``terms`` * max|x| (e.g. 2 for a difference of two entries)
+    exceeds iinfo(dtype).max.  Wrap-around is a dtype artefact, not a law
+    violation, so callers skip.  Otherwise the epsilon of the coarsest floating
+    dtype (float32/float16 inputs stay checked with a scaled tolerance).
+    """
+    for value in values:
+        array = np.asarray(value)
+        if array.dtype.kind in "iu" and array.size:
+            peak = float(np.max(np.abs(array.astype(np.float64))))
+            if terms * peak > float(np.iinfo(array.dtype).max):
+                return None
+    return _dtype_epsilon(*values)
+
+
 def _coarse_finfo(*values):
     """finfo of the coarsest (largest-eps) floating dtype among ``values``."""
     info = np.finfo(np.float64)
@@ -386,9 +404,18 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
             if span == 0:
                 return
             max_coord = _scale(used_coords)
-            if max_coord / span < 1e6:
-                shift = span * np.array([0.5, -0.25, 0.125],
-                                        dtype=coords.dtype)
+            # integer coordinates: the library's station differences (and
+            # coords + shift) are formed in the input dtype and wrap once
+            # 2*max|coord| leaves iinfo (round 12: int8 200 -> -56)
+            coord_eps = _narrow_dtype_epsilon(used_coords, terms=2)
+            if coord_eps is not None and max_coord / span < 1e6:
+                # build the shift in float and keep the production dtype: an
+                # integer dtype gets an integer (rounded) shift, never the
+                # fractions truncated to zero by casting first
+                shift = span * np.array([0.5, -0.25, 0.125])
+                if coords.dtype.kind in "iu":
+                    shift = np.round(shift)
+                shift = shift.astype(coords.dtype)
                 translated = array_rotation_strain(
                     subarray, ts1, ts2, ts3, vp, vs, coords + shift, sigmau)
                 # coords + shift re-rounds every coordinate by
@@ -397,7 +424,7 @@ def check_array_rotation_strain(subarray, ts1, ts2, ts3, vp, vs,
                 trigger_if(_array_result_differs(
                                result, translated, condition,
                                4.0 * max(1.0, max_coord / span),
-                               _dtype_epsilon(coords)),
+                               coord_eps),
                            "OB-ARR-002")
 
             used_data = [np.asarray(t)[:, used] for t in (ts1, ts2, ts3)]
@@ -747,7 +774,21 @@ def check_paz_response(poles, zeros, scale_fac, t_samp, nfft, response,
                         continue
                     condition = abs(upper) / max(abs(value),
                                                  np.finfo(float).tiny)
-                    conditions.append(float(condition))
+                    # the library expands the roots into coefficients first
+                    # (np.poly), which perturbs each coefficient by ~eps times
+                    # the elementary symmetric functions of |roots|; the
+                    # resulting relative error of the polynomial at s is
+                    # bounded by prod(|s|+|r|)/|prod(s-r)| (>= the evaluation
+                    # condition above). Round 12: 24 unit-circle zeros left
+                    # 5.6e-12 coefficient noise -> 3e-11 relative response
+                    # error, beyond the evaluation-only tolerance.
+                    r = np.asarray(roots, dtype=complex)
+                    with np.errstate(all="ignore"):
+                        log_exp = float(np.sum(np.log(abs(s) + np.abs(r))) -
+                                        np.sum(np.log(np.abs(s - r))))
+                    expansion = (np.exp(log_exp) if log_exp < 700.0
+                                 else np.inf)
+                    conditions.append(float(max(condition, expansion)))
                 condition = max(1.0, *conditions)
                 if not np.isfinite(condition) or condition > 1e8:
                     continue

@@ -93,7 +93,7 @@
       "id": "OB-ARR-002",
       "invariant": "A common translation of all station coordinates leaves strain and rotation unchanged.",
       "observation_point": "After the result dictionary is assembled.",
-      "precondition": "OB-ARR-001 domain and a dtype-preserving translation whose rounding is small relative to the aperture of the sub-array in use. The weighted normal matrix (station uncertainties included) must be well conditioned (condition number below 1e7).",
+      "precondition": "OB-ARR-001 domain and a dtype-preserving translation (integer coordinates get an integer shift) whose rounding is small relative to the aperture of the sub-array in use; integer coordinates must not wrap in station differences or the shift (2*max|coord| within the dtype's range). The weighted normal matrix (station uncertainties included) must be well conditioned (condition number below 1e7).",
       "rationale": "Spatial gradients depend on station separation, not coordinate origin.",
       "scientific_quantity": "array-derived spatial gradients",
       "source": "obspy/signal/array_analysis.py",
@@ -244,12 +244,12 @@
       "symbol": "classic_sta_lta"
     },
     {
-      "alarm": "Any of up to 33 sampled bins disagrees beyond its condition- and degree-aware polynomial/product evaluation error.",
+      "alarm": "Any of up to 33 sampled bins disagrees beyond its condition- and degree-aware error bound, where the condition covers both the expansion of poles/zeros into polynomial coefficients and the polynomial/product evaluation.",
       "family": "instrument_response_dual_path",
       "id": "OB-RESP-001",
       "invariant": "Vectorized SciPy response amplitudes agree with the modulus of ObsPy's scalar PAZ evaluator at sampled FFT frequencies.",
       "observation_point": "After vector response computation.",
-      "precondition": "Finite stable conjugate PAZ, positive sampling interval/FFT length, and sampled polynomial-evaluation condition <=1e8, with polynomial coefficients, evaluated terms and the reference's running pole/zero product inside the normal float64 range.",
+      "precondition": "Finite stable conjugate PAZ, positive sampling interval/FFT length, and sampled condition <=1e8 (the larger of the polynomial-evaluation condition and the root-expansion condition prod(|s|+|r|)/|prod(s-r)|), with polynomial coefficients, evaluated terms and the reference's running pole/zero product inside the normal float64 range.",
       "rationale": "Instrument correction requires a consistent transfer function across independent paths.",
       "scientific_quantity": "poles-and-zeros instrument transfer amplitude",
       "source": "obspy/signal/invsim.py",
