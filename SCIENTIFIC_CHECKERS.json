@@ -52,7 +52,7 @@
       "symbol": "rotate_zne_lqt"
     },
     {
-      "alarm": "Round-trip error exceeds eps times orientation condition and signal scale.",
+      "alarm": "Round-trip error exceeds eps times orientation condition and signal scale, with eps that of the coarsest dtype among the traces and the orientation matrix (the matrix follows NumPy's promotion of the angle dtype: float32 for float32 or int16 angles).",
       "family": "sensor_orientation_basis_change",
       "id": "OB-ROT-005",
       "invariant": "Sensor components to ZNE and back to the same sensor basis recovers all records.",
@@ -64,7 +64,7 @@
       "symbol": "rotate2zne"
     },
     {
-      "alarm": "A permuted public-API call differs beyond the conditioning-aware bound.",
+      "alarm": "A permuted public-API call differs beyond the conditioning-aware bound (eps as in OB-ROT-005).",
       "family": "sensor_orientation_channel_association",
       "id": "OB-ROT-006",
       "invariant": "Jointly permuting channel data and their orientation metadata leaves ZNE unchanged.",

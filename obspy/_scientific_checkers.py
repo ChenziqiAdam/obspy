@@ -298,7 +298,13 @@ def check_rotate2zne(data, orientations, inverse, result):
                 args.extend((component, azimuth, dip))
             restored = rotate2zne(*args, inverse=True)
             signal_scale = _scale(*data, *result, *restored)
-            bad = any(_different_at_scale(a, b, signal_scale, 256, condition)
+            # the base-change matrix follows NumPy's promotion of the angle
+            # dtype (np.deg2rad of float32 / int16 scalars is float32), and
+            # np.linalg.inv then runs in that precision: the round trip and
+            # the permuted re-call carry its eps, not the traces' eps
+            work_eps = _dtype_epsilon(*data, *result, *restored, matrix)
+            bad = any(_different_at_scale(a, b, signal_scale, 256, condition,
+                                          epsilon=work_eps)
                       for a, b in zip(data, restored))
             trigger_if(bad, "OB-ROT-005")
 
@@ -308,7 +314,9 @@ def check_rotate2zne(data, orientations, inverse, result):
                 args.extend((data[index], orientations[index][0],
                              orientations[index][1]))
             permuted = rotate2zne(*args)
-            bad = any(_different_at_scale(a, b, signal_scale, 256, condition)
+            bad = any(_different_at_scale(a, b, signal_scale, 256, condition,
+                                          epsilon=max(work_eps, _dtype_epsilon(
+                                              *permuted)))
                       for a, b in zip(result, permuted))
             trigger_if(bad, "OB-ROT-006")
     except Exception:
