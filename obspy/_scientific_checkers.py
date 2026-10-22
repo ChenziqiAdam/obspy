@@ -842,6 +842,16 @@ def _circular_difference(a, b):
 
 def _geodesic_reaches(geod, lat1, lon1, lat2, lon2, azi, dist, baz,
                       distance_tol, angle_tol):
+    # geographiclib's series Direct/Inverse are round-off accurate only for
+    # small flattening (|f| ~< 0.02); at large f its own Inverse->Direct round
+    # trip misses by cm.  Widen both tolerances by 8x that measured self-miss
+    # (about 0 for planetary f, so Earth-like checks are unchanged).
+    ref = geod.Inverse(float(lat1), float(lon1), float(lat2), float(lon2))
+    ref_end = geod.Direct(float(lat1), float(lon1), ref["azi1"], ref["s12"])
+    self_miss = geod.Inverse(ref_end["lat2"], ref_end["lon2"], float(lat2),
+                             float(lon2))["s12"]
+    distance_tol = max(distance_tol, 8.0 * self_miss)
+    angle_tol = max(angle_tol, 8.0 * np.rad2deg(self_miss / geod.a))
     end = geod.Direct(float(lat1), float(lon1), float(azi), float(dist))
     miss = geod.Inverse(end["lat2"], end["lon2"], float(lat2),
                         float(lon2))["s12"]

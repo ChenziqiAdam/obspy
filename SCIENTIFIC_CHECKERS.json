@@ -273,7 +273,7 @@
       "id": "OB-GEO-002",
       "invariant": "Exchanging endpoints exchanges forward and back azimuths modulo 360 degrees.",
       "observation_point": "Original and exchanged inverse-geodesic solutions.",
-      "precondition": "OB-GEO-001 domain with distinct endpoints; a bearing mismatch is not reported when both returned solutions are verified geodesics of the common length joining the endpoints (non-unique shortest path near the cut locus; requires geographiclib to verify).",
+      "precondition": "OB-GEO-001 domain with distinct endpoints; a bearing mismatch is not reported when both returned solutions are verified geodesics of the common length joining the endpoints (non-unique shortest path near the cut locus; requires geographiclib to verify, with verifier tolerances widened by geographiclib's own measured Inverse-to-Direct round-trip miss, which is non-negligible only at non-planetary flattening).",
       "rationale": "Reversing a geodesic exchanges its endpoint bearings.",
       "scientific_quantity": "forward and back geodesic azimuths",
       "source": "obspy/geodetics/base.py",
