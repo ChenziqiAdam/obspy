@@ -909,7 +909,13 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
                                     coordinate_scale / singular_separation)
             angle_tol = max(4096.0, 64.0 * bearing_condition) * \
                 _EPS * 360.0
-            if bearing_condition <= 1e8:
+            # Exactly opposite poles: every meridian is a shortest geodesic
+            # (one-parameter family, Karney 2013 sec. 3) and the azimuth at
+            # a pole exists only through its longitude label, so az12 vs
+            # baz21 has no unique answer.  Exact +-90 only: near-pole pairs
+            # stay checked (their cut-locus case is handled below).
+            both_poles = abs(float(lat1)) == 90.0 and abs(float(lat2)) == 90.0
+            if bearing_condition <= 1e8 and not both_poles:
                 bad_bearings = (
                     _circular_difference(result[1], reverse[2]) > angle_tol or
                     _circular_difference(result[2], reverse[1]) > angle_tol)
