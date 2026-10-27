@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "base_commit": "1549968eeddfd03b11f185132ecaebae6b5f6676",
-  "note": "Complete public scientific-checker bank. Inactive unless SCIBENCH_TRIGGER_LOG is set. Historical quality-review metadata does not remove checker IDs from the agent-visible task.",
+  "note": "Complete public scientific-checker bank. Inactive unless SCIBENCH_TRIGGER_LOG is set.",
   "checkers": [
     {
       "alarm": "Condition-aware round-trip error exceeds a participating-dtype operation bound.",
@@ -273,7 +273,7 @@
       "id": "OB-GEO-002",
       "invariant": "Exchanging endpoints exchanges forward and back azimuths modulo 360 degrees.",
       "observation_point": "Original and exchanged inverse-geodesic solutions.",
-      "precondition": "OB-GEO-001 domain with distinct endpoints; a bearing mismatch is not reported when both returned solutions are verified geodesics of the common length joining the endpoints (non-unique shortest path near the cut locus; requires geographiclib to verify, with verifier tolerances widened by geographiclib's own measured Inverse-to-Direct round-trip miss, which is non-negligible only at non-planetary flattening); not checked when both endpoints are exactly at opposite poles (every meridian is a shortest path, so the bearing pair is not unique).",
+      "precondition": "OB-GEO-001 domain with distinct endpoints; a bearing mismatch is not reported when both returned solutions are verified geodesics of the common length joining the endpoints (non-unique shortest path near the cut locus; requires geographiclib to verify, with verifier tolerances widened by geographiclib's own measured Inverse-to-Direct round-trip miss and arrival-azimuth error, which are non-negligible only at non-planetary flattening); not checked when both endpoints are exactly at opposite poles (every meridian is a shortest path, so the bearing pair is not unique).",
       "rationale": "Reversing a geodesic exchanges its endpoint bearings.",
       "scientific_quantity": "forward and back geodesic azimuths",
       "source": "obspy/geodetics/base.py",
@@ -285,7 +285,7 @@
       "id": "OB-GEO-003",
       "invariant": "Adding a full turn to both longitudes preserves distance and bearings.",
       "observation_point": "Original and common-shifted inverse-geodesic solutions.",
-      "precondition": "OB-GEO-001 domain with moderate longitudes and bearing condition <=1e8 away from coincident and antipodal singularities. The distance tolerance includes the rounding of the 360-degree longitude shift.",
+      "precondition": "OB-GEO-001 domain with moderate longitudes and bearing condition <=1e8 away from coincident singularities and from the true (geodesic) antipode, whose distance is measured with geographiclib rather than as pi - s/a, which fails on an oblate ellipsoid. The distance tolerance includes the rounding of the 360-degree longitude shift.",
       "rationale": "A geodesic cannot depend on longitude representation.",
       "scientific_quantity": "ellipsoidal geodesic under longitude-frame changes",
       "source": "obspy/geodetics/base.py",

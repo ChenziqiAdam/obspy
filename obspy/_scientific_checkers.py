@@ -850,8 +850,17 @@ def _geodesic_reaches(geod, lat1, lon1, lat2, lon2, azi, dist, baz,
     ref_end = geod.Direct(float(lat1), float(lon1), ref["azi1"], ref["s12"])
     self_miss = geod.Inverse(ref_end["lat2"], ref_end["lon2"], float(lat2),
                              float(lon2))["s12"]
+    inexact = self_miss > distance_tol
     distance_tol = max(distance_tol, 8.0 * self_miss)
     angle_tol = max(angle_tol, 8.0 * np.rad2deg(self_miss / geod.a))
+    if inexact:
+        # the series truncation also shows in the arrival bearing of that
+        # round trip (it exceeds miss/a by 1e2-1e3 at f ~ 0.9).  Only used
+        # when the round trip itself misses by more than the verifier's
+        # tolerance: at a pole the azimuth label flips by 180 deg without
+        # any geometric error.
+        angle_tol = max(angle_tol, 8.0 * float(_circular_difference(
+            ref_end["azi2"], ref["azi2"])))
     end = geod.Direct(float(lat1), float(lon1), float(azi), float(dist))
     miss = geod.Inverse(end["lat2"], end["lon2"], float(lat2),
                         float(lon2))["s12"]
@@ -909,6 +918,24 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
                                     coordinate_scale / singular_separation)
             angle_tol = max(4096.0, 64.0 * bearing_condition) * \
                 _EPS * 360.0
+            # True antipode distance: on an oblate ellipsoid the polar
+            # antipodal distance is ~ f*pi*a/2 short of pi*a, so pi - s/a
+            # misses an input that is only ~1e-15 rad from the antipode
+            # (where the azimuth is ill-conditioned, Karney 2013 sec. 3).
+            antipode_separation = np.pi
+            try:
+                from geographiclib.geodesic import Geodesic
+                antipode_separation = Geodesic(float(a), float(f)).Inverse(
+                    float(lat2), float(lon2), -float(lat1),
+                    float(lon1) + 180.0)["s12"] / float(a)
+            except Exception:
+                pass
+            # (used for the frame-shift check only: reciprocity of a reversed
+            # call involves no input re-rounding to amplify)
+            shift_condition = max(bearing_condition, coordinate_scale /
+                                  max(antipode_separation, _EPS))
+            shift_angle_tol = max(4096.0, 64.0 * shift_condition) * \
+                _EPS * 360.0
             # Exactly opposite poles: every meridian is a shortest geodesic
             # (one-parameter family, Karney 2013 sec. 3) and the azimuth at
             # a pole exists only through its longitude label, so az12 vs
@@ -930,7 +957,7 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
             # to a * (2 ulp in radians)
             shift_tol = distance_tol + 2.0 * float(a) * np.deg2rad(
                 np.spacing(max(abs(float(lon1)), abs(float(lon2))) + 360.0))
-            if (bearing_condition <= 1e8 and
+            if (shift_condition <= 1e8 and
                     max(abs(lon1), abs(lon2)) <= 1e6):
                 # shift the stored values in float64 (no dtype re-rounding)
                 shifted = gps2dist_azimuth(float(lat1), float(lon1) + 360.0,
@@ -948,9 +975,9 @@ def check_gps2dist_azimuth(lat1, lon1, lat2, lon2, a, f, result):
                                             a=a, f=f)
                 bad_shift = (abs(base[0] - shifted[0]) > shift_tol or
                              _circular_difference(base[1], shifted[1]) >
-                             angle_tol or
+                             shift_angle_tol or
                              _circular_difference(base[2], shifted[2]) >
-                             angle_tol)
+                             shift_angle_tol)
                 trigger_if(bad_shift, "OB-GEO-003")
 
             spherical = result if f == 0 else gps2dist_azimuth(
